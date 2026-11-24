@@ -8,6 +8,7 @@ enum Theme {
     static let faint = Color(hex: 0x8A8E95)
     static let field = Color(hex: 0xF4F4F2)
     static let line = Color(hex: 0xE8E8E5)
+    static let paper = Color(hex: 0xFCF8F0)
     static let sage = Color(hex: 0x7D9C90)
     static let amber = Color(hex: 0xC08A52)
     static let amberText = Color(hex: 0x8A5F35)
@@ -154,7 +155,7 @@ struct CompanionView: View {
             anchoredMenu
         case .panel(let page):
             ViewThatFits(in: .vertical) {
-                PanelCard(state: state, page: page)
+                PanelCard(state: state, page: page).fixedSize(horizontal: false, vertical: true)
                 ScrollView { PanelCard(state: state, page: page) }
             }
             .padding(alignEdge, 4)
@@ -367,13 +368,13 @@ struct PanelCard: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: page == .warden ? 12 : 14) {
             HStack(spacing: 8) {
                 Button { state.overlay = .menu } label: {
                     Image(systemName: "chevron.left").font(.system(size: 11, weight: .semibold))
                         .frame(width: 28, height: 28).background(Theme.field, in: Circle())
                 }.buttonStyle(.plain).accessibilityLabel("Back")
-                Text(title).font(.system(size: 14, weight: .semibold))
+                Text(title).font(.system(size: page == .warden ? 17 : 14, weight: .semibold))
                 Spacer()
                 Button { state.overlay = .none } label: {
                     Image(systemName: "xmark").font(.system(size: 11, weight: .semibold))
@@ -394,7 +395,10 @@ struct PanelCard: View {
         }
         .padding(16)
         .frame(width: 380)
-        .background(RoundedRectangle(cornerRadius: 18).fill(Color.white).shadow(color: .black.opacity(0.28), radius: 18, y: 8))
+        .background {
+            RoundedRectangle(cornerRadius: 18).fill(page == .warden ? Theme.paper : .white)
+                .shadow(color: .black.opacity(0.28), radius: 18, y: 8)
+        }
         .foregroundStyle(Theme.ink)
     }
 }

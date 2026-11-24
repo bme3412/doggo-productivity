@@ -29,10 +29,10 @@ enum Strictness: Int, CaseIterable, Identifiable {
     }
     var explanation: String {
         switch self {
-        case .nap: return "Keeps Warden quiet and still tracks screen time."
-        case .sigh: return "Sighs at you when a distraction streak hits the sigh mark."
-        case .fetch: return "Sighs, then wants to play fetch at the fetch mark."
-        case .bark: return "Sighs, fetch, then barks and closes the tab at the bark mark."
+        case .nap: return "Tracks screen time quietly."
+        case .sigh: return "Sighs after \(Prefs.sighMinutes) min on a distracting site."
+        case .fetch: return "Sighs at \(Prefs.sighMinutes)m and asks to play fetch at \(Prefs.fetchMinutes)m."
+        case .bark: return "Sighs at \(Prefs.sighMinutes)m, asks to play fetch at \(Prefs.fetchMinutes)m, and gives a tab-close warning at \(Prefs.barkMinutes)m."
         }
     }
 }

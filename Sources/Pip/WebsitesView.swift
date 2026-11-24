@@ -225,41 +225,85 @@ struct VisitCoverageLabel: View {
 
 struct TopWebsiteRows: View {
     let sites: [SiteTime]
+    var emptyMessage = "No websites logged for this period."
     let openWebsites: () -> Void
 
     var body: some View {
         let top = Array(sites.prefix(5))
-        VStack(alignment: .leading, spacing: 7) {
+        VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text("Top websites").font(.system(size: 12, weight: .semibold))
+                Text("Top websites").font(.system(size: 13, weight: .semibold))
                 Spacer()
-                Button("All websites", action: openWebsites)
-                    .buttonStyle(.link)
-                    .font(.system(size: 12))
-            }
-            if let first = top.first {
-                HStack(spacing: 8) {
-                    Spacer()
-                    Text("Visits").frame(width: 46, alignment: .trailing)
-                    Text("Time").frame(width: 58, alignment: .trailing)
+                Button(action: openWebsites) {
+                    HStack(spacing: 5) {
+                        Text("All websites")
+                        Image(systemName: "arrow.up.right")
+                            .font(.system(size: 9, weight: .semibold))
+                            .accessibilityHidden(true)
+                    }
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Theme.trail)
+                    .padding(.horizontal, 9)
+                    .frame(minHeight: 25)
+                    .background(Theme.trail.opacity(0.09), in: Capsule())
+                    .contentShape(Capsule())
                 }
-                .font(.system(size: 11, weight: .medium))
+                .buttonStyle(.plain)
+                .help("Open website history")
+            }
+            .padding(.bottom, 5)
+
+            if let first = top.first {
+                HStack(spacing: 12) {
+                    Spacer()
+                    Text("Visits").frame(width: 44, alignment: .trailing)
+                    Text("Time").frame(width: 49, alignment: .trailing)
+                }
+                .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(Theme.muted)
                 ForEach(top) { site in
-                    HStack(spacing: 8) {
-                        Text(site.host).lineLimit(1).frame(width: 115, alignment: .leading).help(site.host)
-                        ProgressView(value: site.seconds, total: max(1, first.seconds))
-                            .progressViewStyle(.linear)
-                            .tint(Theme.sage)
-                            .accessibilityHidden(true)
-                        VisitCountText(site: site).frame(width: 46, alignment: .trailing)
-                        Text(Format.websiteDuration(site.seconds)).monospacedDigit()
-                            .frame(width: 58, alignment: .trailing)
-                    }
-                    .font(.system(size: 11)).foregroundStyle(Theme.muted)
+                    row(site, timeScale: max(1, first.seconds))
                 }
-                VisitCoverageLabel(sites: top).font(.system(size: 10)).foregroundStyle(Theme.muted)
+                VisitCoverageLabel(sites: top)
+                    .font(.system(size: 10)).foregroundStyle(Theme.muted)
+                    .padding(.top, 4)
+            } else {
+                Text(emptyMessage)
+                    .font(.system(size: 11)).foregroundStyle(Theme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
+        .padding(.horizontal, 11)
+        .padding(.vertical, 9)
+        .background {
+            RoundedRectangle(cornerRadius: 11)
+                .fill(Color.white)
+                .strokeBorder(Theme.line)
+        }
+    }
+
+    private func row(_ site: SiteTime, timeScale: TimeInterval) -> some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(site.host).fontWeight(.medium).lineLimit(1).help(site.host)
+                GeometryReader { geometry in
+                    Capsule().fill(Theme.trail.opacity(0.12))
+                        .overlay(alignment: .leading) {
+                            Capsule().fill(Theme.trail)
+                                .frame(width: geometry.size.width * (site.seconds / timeScale))
+                        }
+                }
+                .frame(height: 3)
+                .accessibilityHidden(true)
+            }
+            VisitCountText(site: site)
+                .foregroundStyle(Theme.muted)
+                .frame(width: 44, alignment: .trailing)
+            Text(Format.websiteDuration(site.seconds)).fontWeight(.medium).monospacedDigit()
+                .frame(width: 49, alignment: .trailing)
+        }
+        .font(.system(size: 11))
+        .foregroundStyle(Theme.ink)
+        .padding(.vertical, 4)
     }
 }
