@@ -7,8 +7,11 @@ struct TranscriptImportView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 15) {
-            Text(state.draft == nil ? "Paste transcript" : "Review transcript")
-                .font(.system(size: 26, weight: .semibold, design: .serif))
+            DoggoWindowHeader {
+                Text(state.draft == nil ? "Paste transcript" : "Review transcript")
+                    .font(.system(size: 26, weight: .semibold, design: .serif))
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 13))
             if let draft = state.draft {
                 TranscriptReview(draft: draft, library: state.library)
             } else {
@@ -26,12 +29,12 @@ struct TranscriptImportView: View {
                 Spacer()
                 if let draft = state.draft {
                     Button("File transcript") { state.fileDraft(draft) }
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(.borderedProminent).tint(Theme.trail)
                         .keyboardShortcut(.defaultAction)
                 } else {
                     if state.isOrganizing { ProgressView().controlSize(.small) }
                     Button(state.isOrganizing ? "Organizing…" : "Organize transcript") { state.organize() }
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(.borderedProminent).tint(Theme.trail)
                         .disabled(state.isOrganizing || state.draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
@@ -230,7 +233,10 @@ struct RefileTranscriptView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 13) {
-            Text("Change folder").font(.system(size: 24, weight: .semibold, design: .serif))
+            DoggoWindowHeader {
+                Text("Change folder").font(.system(size: 24, weight: .semibold, design: .serif))
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 13))
             Text(record.title).foregroundStyle(.secondary)
             TranscriptFilingFields(record: $record, library: library)
             if saveError { Text("Doggo couldn’t change this folder.").foregroundStyle(.red) }
@@ -246,7 +252,7 @@ struct RefileTranscriptView: View {
                         saveError = true
                     }
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.borderedProminent).tint(Theme.trail)
                 .keyboardShortcut(.defaultAction)
             }
         }

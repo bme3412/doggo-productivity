@@ -166,11 +166,69 @@ struct TranscriptReader: View {
     }
 
     var body: some View {
+        VStack(spacing: 12) {
+            titleCard
+            readingCard
+        }
+        .onAppear { highlights = store.highlights(for: record.id) }
+        .sheet(isPresented: $changingFolder) {
+            RefileTranscriptView(record: record, library: store, onSave: onSelect)
+        }
+        .alert("Delete this transcript?", isPresented: $confirmingDelete) {
+            Button("Delete", role: .destructive) {
+                if !store.delete(id: record.id) { problem = "Doggo couldn’t delete this transcript." }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This deletes the saved transcript and its highlights.")
+        }
+    }
+
+    private var titleCard: some View {
         VStack(spacing: 0) {
-            header
-                .padding(.horizontal, 24).padding(.top, 20).padding(.bottom, 13)
-                .frame(maxWidth: 800)
-                .frame(maxWidth: .infinity)
+            DoggoWindowHeader {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(record.path).font(.caption.weight(.semibold)).foregroundStyle(Theme.reportHighlight)
+                    Text(record.title)
+                        .font(.system(size: 30, weight: .semibold, design: .serif))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                }
+            }
+            HStack(spacing: 9) {
+                if !record.sourceType.isEmpty { Text(record.sourceType.capitalized) }
+                Text("\(record.wordCount.formatted()) words")
+                if let sourceURL {
+                    Link("Open source", destination: sourceURL)
+                } else if !record.source.isEmpty {
+                    Text(record.source).lineLimit(1).help(record.source)
+                }
+                Spacer(minLength: 8)
+                readerActions
+            }
+            .font(.caption).foregroundStyle(.secondary)
+            .padding(.horizontal, 15).padding(.vertical, 7)
+            .background(LibraryColors.shelf)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 13))
+    }
+
+    private var readingCard: some View {
+        VStack(spacing: 0) {
+            ViewThatFits(in: .horizontal) {
+                HStack {
+                    tabPicker
+                    Spacer(minLength: 8)
+                    textTools
+                }
+                VStack(alignment: .leading, spacing: 7) {
+                    tabPicker
+                    textTools
+                }
+            }
+            .padding(.horizontal, 16).padding(.vertical, 10)
+            .frame(maxWidth: 800, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
             Rectangle().fill(LibraryColors.line).frame(height: 1)
             if let problem {
                 Text(problem).font(.callout).foregroundStyle(.red)
@@ -187,55 +245,7 @@ struct TranscriptReader: View {
                 highlightList
             }
         }
-        .background(LibraryColors.paper)
-        .onAppear { highlights = store.highlights(for: record.id) }
-        .sheet(isPresented: $changingFolder) {
-            RefileTranscriptView(record: record, library: store, onSave: onSelect)
-        }
-        .alert("Delete this transcript?", isPresented: $confirmingDelete) {
-            Button("Delete", role: .destructive) {
-                if !store.delete(id: record.id) { problem = "Doggo couldn’t delete this transcript." }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("This deletes the saved transcript and its highlights.")
-        }
-    }
-
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            HStack {
-                Text(record.path).font(.caption.weight(.semibold)).foregroundStyle(LibraryColors.accent)
-                Spacer()
-                readerActions
-            }
-            Text(record.title)
-                .font(.system(size: 30, weight: .semibold, design: .serif))
-                .fixedSize(horizontal: false, vertical: true)
-                .textSelection(.enabled)
-            HStack(spacing: 9) {
-                if !record.sourceType.isEmpty { Text(record.sourceType.capitalized) }
-                Text("\(record.wordCount.formatted()) words")
-                if let sourceURL {
-                    Link("Open source", destination: sourceURL)
-                } else if !record.source.isEmpty {
-                    Text(record.source).lineLimit(1).help(record.source)
-                }
-            }
-            .font(.caption).foregroundStyle(.secondary)
-            .padding(.bottom, 4)
-            ViewThatFits(in: .horizontal) {
-                HStack {
-                    tabPicker
-                    Spacer(minLength: 8)
-                    textTools
-                }
-                VStack(alignment: .leading, spacing: 7) {
-                    tabPicker
-                    textTools
-                }
-            }
-        }
+        .doggoWindowCard()
     }
 
     private var tabPicker: some View {
@@ -412,8 +422,8 @@ private struct ReaderTextPane: NSViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
-    func makeNSView(context: Context) -> NSScrollView {
-        let scroll = NSScrollView()
+    func makeNSView(context: Context) -> ReadingScrollView {
+        let scroll = ReadingScrollView()
         scroll.hasVerticalScroller = true
         scroll.drawsBackground = false
         let text = ReadingTextView(frame: scroll.contentView.bounds)
@@ -432,7 +442,7 @@ private struct ReaderTextPane: NSViewRepresentable {
         return scroll
     }
 
-    func updateNSView(_ scroll: NSScrollView, context: Context) {
+    func updateNSView(_ scroll: ReadingScrollView, context: Context) {
         guard let text = scroll.documentView as? ReadingTextView else { return }
         let coordinator = context.coordinator
         coordinator.onSelection = onSelection
@@ -460,10 +470,7 @@ private struct ReaderTextPane: NSViewRepresentable {
 
         if let jump, coordinator.lastJump != jump.id {
             coordinator.lastJump = jump.id
-            DispatchQueue.main.async { [weak text, weak coordinator] in
-                guard coordinator?.lastJump == jump.id else { return }
-                text?.jump(to: jump.offset)
-            }
+            scroll.jump(to: jump.offset)
         }
     }
 
@@ -487,6 +494,24 @@ private struct ReaderTextPane: NSViewRepresentable {
             onTimestamp?(seconds)
             return true
         }
+    }
+}
+
+private final class ReadingScrollView: NSScrollView {
+    private var pendingJump: Int?
+
+    func jump(to offset: Int) {
+        pendingJump = offset
+        needsLayout = true
+    }
+
+    override func layout() {
+        super.layout()
+        // Switching to the transcript can create this view before it has a viewport.
+        guard contentView.bounds.width > 0, contentView.bounds.height > 0,
+              let offset = pendingJump, let text = documentView as? ReadingTextView else { return }
+        pendingJump = nil
+        text.jump(to: offset)
     }
 }
 

@@ -20,59 +20,31 @@ struct MyDogsView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 14) {
-                Picker("On desktop", selection: desktop) {
-                    Text("Classic Doggo").tag([DesktopDog.classic.id])
-                    Text("Black dog").tag([DesktopDog.black.id])
-                    Text("Classic Doggo + black dog").tag(DesktopDog.builtIns.map(\.id))
-                    if !store.profiles.isEmpty {
-                        Divider()
-                        ForEach(store.profiles) { Text($0.name).tag([$0.id]) }
-                        if store.profiles.count == 2 { Text("Both photo dogs").tag(store.profiles.map(\.id)) }
-                    }
-                }
-                .fixedSize()
-                if store.visibleDogs.count == 2 {
-                    Picker("Guide", selection: Binding(get: { store.guide.id }, set: store.chooseGuide)) {
-                        ForEach(store.visibleDogs) { Text($0.name).tag($0.id) }
-                    }
-                    .fixedSize()
-                    .help("The guide gives reminders and offers high fives.")
-                }
-                Spacer()
-                if importing { ProgressView().controlSize(.small).accessibilityLabel("Reading photos") }
-                Button { picking = true } label: {
-                    Label("Add photos…", systemImage: "photo.badge.plus")
-                }
-                .disabled(store.availableSlots == 0 || importing)
-                .help(store.availableSlots == 0 ? "My Dogs has room for two dogs." : "Choose dog photos")
-            }
-            .padding(16)
-            Divider()
-
+        VStack(spacing: 12) {
+            desktopCard
             if let dog = selectedDog {
                 if store.profiles.count == 2 {
                     Picker("Edit dog", selection: Binding(get: { dog.id }, set: { selection = $0 })) {
                         ForEach(store.profiles) { Text($0.name).tag($0.id) }
                     }
+                    .labelsHidden()
                     .pickerStyle(.segmented)
-                    .fixedSize()
-                    .padding(.top, 16)
+                    .frame(maxWidth: 350)
                 }
                 DogLookEditor(profile: dog, store: store).id(dog.id)
             } else {
-                ContentUnavailableView("Make Doggo yours", systemImage: "pawprint",
-                                       description: Text("Choose a photo of one or two dogs to make illustrated desktop companions."))
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                desktopPreview
             }
             if let error = importError ?? store.error {
                 Text(error)
                     .foregroundStyle(.red)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(12)
             }
         }
+        .padding(16)
+        .background(LibraryColors.paper)
+        .tint(LibraryColors.accent)
+        .textFieldStyle(.roundedBorder)
         .fileImporter(isPresented: $picking, allowedContentTypes: [.image],
                       allowsMultipleSelection: store.availableSlots > 1, onCompletion: readPhotos)
         .sheet(item: $pending) { batch in
@@ -83,6 +55,97 @@ struct MyDogsView: View {
                 selection = dogs.first?.id
                 pending = nil
                 return nil
+            }
+        }
+    }
+
+    private var desktopCard: some View {
+        VStack(spacing: 0) {
+            DoggoWindowHeader { Text("Desktop companions") }
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 14) {
+                    desktopPicker
+                    guidePicker
+                    Spacer(minLength: 5)
+                    photoButton
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        desktopPicker
+                        Spacer(minLength: 5)
+                        photoButton
+                    }
+                    guidePicker
+                }
+            }
+            .padding(12)
+            .background(LibraryColors.shelf)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 13))
+    }
+
+    private var desktopPicker: some View {
+        Picker("On desktop", selection: desktop) {
+            Text("Classic Doggo").tag([DesktopDog.classic.id])
+            Text("Black dog").tag([DesktopDog.black.id])
+            Text("Classic Doggo + black dog").tag(DesktopDog.builtIns.map(\.id))
+            if !store.profiles.isEmpty {
+                Divider()
+                ForEach(store.profiles) { Text($0.name).tag([$0.id]) }
+                if store.profiles.count == 2 { Text("Both photo dogs").tag(store.profiles.map(\.id)) }
+            }
+        }
+        .frame(maxWidth: 290, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private var guidePicker: some View {
+        if store.visibleDogs.count == 2 {
+            Picker("Guide", selection: Binding(get: { store.guide.id }, set: store.chooseGuide)) {
+                ForEach(store.visibleDogs) { Text($0.name).tag($0.id) }
+            }
+            .frame(maxWidth: 170, alignment: .leading)
+            .help("The guide gives reminders and offers high fives.")
+        }
+    }
+
+    private var photoButton: some View {
+        HStack(spacing: 7) {
+            if importing { ProgressView().controlSize(.small).accessibilityLabel("Reading photos") }
+            Button { picking = true } label: {
+                Label("Add photos…", systemImage: "photo.badge.plus")
+            }
+            .buttonStyle(.borderedProminent).tint(Theme.trail)
+            .disabled(store.availableSlots == 0 || importing)
+            .help(store.availableSlots == 0 ? "My Dogs has room for two dogs." : "Choose dog photos")
+        }
+        .fixedSize()
+    }
+
+    private var desktopPreview: some View {
+        let dogs = store.visibleDogs
+        return ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 12) {
+                    ForEach(Array(dogs.enumerated()), id: \.element.id) { index, dog in
+                        VStack(alignment: .leading, spacing: 12) {
+                            DogIllustration(artwork: dog.artwork, scale: 1.15, alternatePace: index > 0)
+                                .accessibilityHidden(true)
+                            HStack(spacing: 8) {
+                                Text(dog.name).font(.system(size: 14, weight: .semibold))
+                                Spacer(minLength: 0)
+                                if dogs.count == 2, store.guide.id == dog.id {
+                                    Label("Guide", systemImage: "pawprint.fill")
+                                        .font(.caption.weight(.semibold)).foregroundStyle(LibraryColors.accent)
+                                }
+                            }
+                        }
+                        .padding(14)
+                        .doggoWindowCard()
+                    }
+                }
+                Text("Add photos to make illustrated desktop companions.")
+                    .font(.callout).foregroundStyle(.secondary)
             }
         }
     }
@@ -134,16 +197,19 @@ private struct DogLookEditor: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
+        VStack(spacing: 12) {
             ScrollView {
-                HStack(alignment: .top, spacing: 24) {
+                HStack(alignment: .top, spacing: 12) {
                     VStack(spacing: 12) {
-                        DogIllustration(look: draft.look, scale: 1.35)
+                        DogIllustration(artwork: .photo(draft.look), scale: 1.2)
                         DogReferencePhoto(data: profile.referencePhoto, height: 135)
                     }
                     .frame(maxWidth: .infinity)
+                    .padding(14)
+                    .doggoWindowCard()
 
                     VStack(alignment: .leading, spacing: 12) {
+                        Text("Appearance").font(.system(size: 14, weight: .semibold))
                         TextField("Name", text: $draft.name)
                         Divider()
                         HStack {
@@ -178,10 +244,10 @@ private struct DogLookEditor: View {
                         }
                     }
                     .frame(width: 292)
+                    .padding(14)
+                    .doggoWindowCard()
                 }
-                .padding(22)
             }
-            Divider()
             HStack {
                 Button("Remove dog…", role: .destructive) { removing = true }
                 Spacer()
@@ -190,10 +256,11 @@ private struct DogLookEditor: View {
                         draft.name = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
                     }
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.borderedProminent).tint(Theme.trail)
                 .disabled(draft == profile || draft.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
-            .padding(16)
+            .padding(12)
+            .background(LibraryColors.shelf, in: RoundedRectangle(cornerRadius: 12))
         }
         .confirmationDialog("Remove \(profile.name) from My Dogs?", isPresented: $removing, titleVisibility: .visible) {
             Button("Remove dog", role: .destructive) { store.remove(profile.id) }
@@ -227,15 +294,17 @@ private struct DogLookEditor: View {
 }
 
 private struct DogIllustration: View {
-    var look: DogLook
+    var artwork: DogArtwork
     var scale: CGFloat
+    var alternatePace = false
 
     var body: some View {
-        DogView(mood: .awake, moodChangedAt: .distantPast, bandana: Theme.sage, artwork: .photo(look), scale: scale)
+        DogView(mood: .awake, moodChangedAt: .distantPast, bandana: Theme.sage, artwork: artwork, scale: scale,
+                motion: DogMotion(alternatePace: alternatePace))
             .offset(x: -24 * scale)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 5)
-            .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 12))
+            .background(LibraryColors.shelf, in: RoundedRectangle(cornerRadius: 8))
             .accessibilityLabel("Animated illustration")
     }
 }
@@ -289,18 +358,22 @@ private struct DogImportReview: View {
             }
         }
         .frame(width: dogs.count == 2 && cropping == nil ? 690 : 490)
+        .background(LibraryColors.paper)
+        .tint(LibraryColors.accent)
+        .textFieldStyle(.roundedBorder)
     }
 
     private var review: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Review your dogs").font(.title2.weight(.semibold))
+            DoggoWindowHeader { Text("Review your dogs") }
+                .clipShape(RoundedRectangle(cornerRadius: 13))
             if dogs.count > capacity {
                 Text("There’s room for one more dog. Choose which one to keep.").foregroundStyle(.secondary)
             }
             HStack(alignment: .top, spacing: 18) {
                 ForEach($dogs) { $dog in
                     VStack(spacing: 8) {
-                        DogIllustration(look: dog.profile.look, scale: 0.95)
+                        DogIllustration(artwork: .photo(dog.profile.look), scale: 0.95)
                         DogReferencePhoto(data: dog.profile.referencePhoto, height: 112)
                         TextField("Dog name", text: $dog.profile.name)
                         HStack {
@@ -328,7 +401,7 @@ private struct DogImportReview: View {
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
                 Button("Add to My Dogs") { error = onAdd(chosenDogs) }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.borderedProminent).tint(Theme.trail)
                     .keyboardShortcut(.defaultAction)
                     .disabled(chosenDogs.isEmpty || chosenDogs.contains { $0.name.isEmpty })
             }
@@ -398,7 +471,7 @@ private struct DogPhotoCrop: View {
                 if processing { ProgressView().controlSize(.small) }
                 Button("Cancel", action: cancel).keyboardShortcut(.cancelAction)
                 Button("Use crop", action: crop)
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.borderedProminent).tint(Theme.trail)
                     .keyboardShortcut(.defaultAction)
                     .disabled(processing || region.width < 0.05 || region.height < 0.05)
             }

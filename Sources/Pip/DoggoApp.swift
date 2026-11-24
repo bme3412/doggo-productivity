@@ -344,6 +344,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                              styleMask: [.titled, .closable, .miniaturizable, .resizable],
                              backing: .buffered, defer: false)
             w.title = "Doggo Library"
+            applyWindowPalette(to: w)
             w.isReleasedWhenClosed = false
             w.contentMinSize = NSSize(width: 790, height: 490)
             w.contentView = NSHostingView(rootView: LibraryView(store: state.library, state: state))
@@ -377,6 +378,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                              styleMask: [.titled, .closable, .miniaturizable, .resizable],
                              backing: .buffered, defer: false)
             w.title = "My Dogs"
+            applyWindowPalette(to: w)
             w.isReleasedWhenClosed = false
             w.contentMinSize = NSSize(width: 660, height: 420)
             w.contentView = NSHostingView(rootView: MyDogsView(store: state.appearance))

@@ -59,20 +59,26 @@ struct LibraryView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
+        VStack(spacing: 12) {
             toolbar
-            Rectangle().fill(LibraryColors.line).frame(height: 1)
             HSplitView {
-                shelf.frame(minWidth: 245, idealWidth: 280, maxWidth: 345)
-                if let record = store.records.first(where: { $0.id == selection }) {
-                    TranscriptReader(record: record, store: store, onSelect: openTranscript)
-                        .id(record.id)
-                        .frame(minWidth: 485, maxWidth: .infinity, maxHeight: .infinity)
-                } else {
-                    emptyReader.frame(minWidth: 485, maxWidth: .infinity, maxHeight: .infinity)
+                shelf.padding(.trailing, 6)
+                    .frame(minWidth: 245, idealWidth: 280, maxWidth: 345)
+                Group {
+                    if let record = store.records.first(where: { $0.id == selection }) {
+                        TranscriptReader(record: record, store: store, onSelect: openTranscript)
+                            .id(record.id)
+                    } else {
+                        emptyReader
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .doggoWindowCard()
+                    }
                 }
+                .padding(.leading, 6)
+                .frame(minWidth: 485, maxWidth: .infinity, maxHeight: .infinity)
             }
         }
+        .padding(16)
         .background(LibraryColors.paper)
         .tint(LibraryColors.accent)
         .onAppear { selectVisible() }
@@ -93,7 +99,7 @@ struct LibraryView: View {
     private var toolbar: some View {
         HStack(spacing: 12) {
             HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary).accessibilityHidden(true)
                 TextField("Search transcripts", text: $query)
                     .textFieldStyle(.plain)
                     .onSubmit(search)
@@ -108,8 +114,8 @@ struct LibraryView: View {
             .padding(.horizontal, 11)
             .frame(maxWidth: 410)
             .frame(height: 32)
-            .background(LibraryColors.paper, in: RoundedRectangle(cornerRadius: 8))
-            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(LibraryColors.line))
+            .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+            .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(LibraryColors.line).allowsHitTesting(false) }
 
             Button("Ask Doggo", action: ask)
                 .disabled(query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || asking)
@@ -121,11 +127,9 @@ struct LibraryView: View {
             Button { state.startPaste() } label: {
                 Label("Paste transcript", systemImage: "plus")
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.borderedProminent).tint(Theme.trail)
             .keyboardShortcut("v", modifiers: [.command, .shift])
         }
-        .padding(.horizontal, 19).padding(.vertical, 12)
-        .background(LibraryColors.shelf)
     }
 
     private var shelf: some View {
@@ -135,6 +139,7 @@ struct LibraryView: View {
                 ScrollView { folderTree }
             }
             .frame(maxHeight: 228, alignment: .top)
+            .background(LibraryColors.shelf)
 
             Rectangle().fill(LibraryColors.line).frame(height: 1)
             if filter == .todos {
@@ -150,7 +155,7 @@ struct LibraryView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .tag(record.id)
                 }
-                .listStyle(.plain)
+                .listStyle(.inset)
                 .scrollContentBackground(.hidden)
                 .overlay {
                     if visible.isEmpty {
@@ -160,7 +165,7 @@ struct LibraryView: View {
                 }
             }
         }
-        .background(LibraryColors.shelf)
+        .doggoWindowCard()
     }
 
     private var folderTree: some View {
@@ -255,7 +260,7 @@ struct LibraryView: View {
                 .padding(.vertical, 5)
             }
         }
-        .listStyle(.plain)
+        .listStyle(.inset)
         .scrollContentBackground(.hidden)
     }
 
@@ -291,6 +296,7 @@ struct LibraryView: View {
         }
         .padding(16)
         .frame(width: 390)
+        .background(LibraryColors.paper)
     }
 
     private func selectVisible() {
