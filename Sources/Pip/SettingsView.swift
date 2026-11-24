@@ -10,6 +10,7 @@ struct SettingsView: View {
     @State private var pace = Prefs.minutesPerMile
     @State private var domains = Prefs.distractingDomains.joined(separator: "\n")
     @State private var goals = Prefs.focusGoals
+    @State private var goalReminders = Prefs.goalReminders
     @State private var saved = false
 
     var body: some View {
@@ -34,6 +35,14 @@ struct SettingsView: View {
                 }
                 TextField("Model", text: $model)
                 Text("Get a key at console.anthropic.com. Doggo sends the content needed for transcript organization, library questions, or goal suggestions when you request that action.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
+            Section("Goal reminders") {
+                Toggle("Suggest a step once a day", isOn: $goalReminders.automatic)
+                reminderWindow("Weekdays", window: $goalReminders.weekdays)
+                reminderWindow("Weekends", window: $goalReminders.weekends)
+                Text("Choose the hours you’re available. Doggo waits for these hours for scheduled check-ins too. Set both times the same to skip those days.")
                     .font(.caption).foregroundStyle(.secondary)
             }
 
@@ -95,12 +104,35 @@ struct SettingsView: View {
         .frame(width: 520, height: 620)
     }
 
+    private func reminderWindow(_ title: String, window: Binding<GoalReminderSchedule.Window>) -> some View {
+        LabeledContent(title) {
+            HStack(spacing: 8) {
+                DatePicker("\(title) start time", selection: timeBinding(window.start), displayedComponents: .hourAndMinute)
+                    .labelsHidden()
+                Text("to").foregroundStyle(.secondary).accessibilityHidden(true)
+                DatePicker("\(title) end time", selection: timeBinding(window.end), displayedComponents: .hourAndMinute)
+                    .labelsHidden()
+            }
+            .controlSize(.small)
+        }
+    }
+
+    private func timeBinding(_ minutes: Binding<Int>) -> Binding<Date> {
+        Binding {
+            let now = Date()
+            return GoalReminderSchedule.date(at: minutes.wrappedValue, on: now, calendar: .current) ?? now
+        } set: { date in
+            minutes.wrappedValue = GoalReminderSchedule.minutes(at: date, calendar: .current)
+        }
+    }
+
     private func save() {
         Prefs.claudeModel = model.trimmingCharacters(in: .whitespaces)
         Prefs.sighMinutes = sigh
         Prefs.fetchMinutes = max(fetch, sigh)
         Prefs.barkMinutes = max(bark, fetch)
         Prefs.minutesPerMile = pace
+        Prefs.goalReminders = goalReminders
         Prefs.distractingDomains = domains
             .split(whereSeparator: \.isNewline)
             .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }

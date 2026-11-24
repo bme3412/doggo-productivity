@@ -59,6 +59,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         state.openWebsitesWindow = { [weak self] in self?.showWebsites() }
 
         panel = FloatingPanel()
+        state.canShowGoalReminders = { [weak self] in self?.panel?.isVisible == true }
         companionHost = NSHostingView(rootView: CompanionView(state: state, appearance: state.appearance,
                                                                tracker: state.tracker) { [weak self] origin in
             self?.moveDog(to: origin)

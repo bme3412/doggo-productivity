@@ -20,6 +20,8 @@ enum NudgeAction: Equatable {
     case openGoals
     case openMyDogs
     case openNextStep
+    case reviewGoalStep(GoalStepReference)
+    case postponeGoalCheckIn(GoalStepReference)
     case highFive
 }
 
@@ -30,6 +32,11 @@ struct Nudge: Equatable, Identifiable {
     var text: String
     var primary: (label: String, action: NudgeAction)
     var secondary: (label: String, action: NudgeAction)? = nil
+
+    var goalStep: GoalStepReference? {
+        if case .reviewGoalStep(let reference) = primary.action { return reference }
+        return nil
+    }
 
     static func == (a: Nudge, b: Nudge) -> Bool { a.id == b.id }
 }
@@ -72,6 +79,7 @@ final class AppState: ObservableObject {
     @Published private(set) var bestFocusStreak = Prefs.bestFocusStreak
     @Published private(set) var accessory = Prefs.accessory
     @Published private(set) var report: WeeklyReport?
+    @Published private(set) var remindedGoalStep: GoalStepReference?
 
     // Archivist draft
     @Published var draftText = ""
@@ -92,6 +100,7 @@ final class AppState: ObservableObject {
     var openGoalsWindow: (() -> Void)?
     var openMyDogsWindow: (() -> Void)?
     var openWebsitesWindow: (() -> Void)?
+    var canShowGoalReminders: () -> Bool = { true }
 
     private var barkTask: Task<Void, Never>?
     private var bubbleTask: Task<Void, Never>?
@@ -191,7 +200,18 @@ final class AppState: ObservableObject {
             overlay = .none
             openMyDogsWindow?()
         case .openNextStep:
+            remindedGoalStep = nil
             overlay = .panel(.nextStep)
+        case .reviewGoalStep(let reference):
+            remindedGoalStep = reference
+            overlay = .panel(.nextStep)
+        case .postponeGoalCheckIn(let reference):
+            if goalBook.setCheckIn(Date().addingTimeInterval(60 * 60), for: reference) {
+                overlay = .none
+            } else {
+                remindedGoalStep = reference
+                overlay = .panel(.nextStep)
+            }
         case .highFive:
             overlay = .none
             react(.celebrate, for: 2.5)
@@ -265,9 +285,12 @@ final class AppState: ObservableObject {
         updateMood()
         if tracker.deskSeconds < lastCoachReminder { lastCoachReminder = 0 }
         guard sample.isActive, overlay == .none, tracker.walk == nil else { return }
-        if let next = goalBook.takeDueCheckIn(at: sample.date) {
-            showReminder(mood: .alert, action: "checks in on \(next.goalTitle)", text: next.step.title,
-                         primary: ("See next step", .openNextStep))
+
+        let reminders = Prefs.goalReminders
+        let timeAvailable = canShowGoalReminders() && sample.bundleID != Bundle.main.bundleIdentifier
+            ? reminders.timeRemaining(at: sample.date) : nil
+        if timeAvailable != nil, let next = goalBook.takeDueCheckIn(at: sample.date) {
+            showGoalReminder(next, at: sample.date, scheduled: true)
             return
         }
         if persona == .warden && deliverWeeklyReportIfDue(at: sample.date) { return }
@@ -280,7 +303,33 @@ final class AppState: ObservableObject {
                 return
             }
         }
+        if let timeAvailable, reminders.automatic, Prefs.lastGoalReminderDay != ActivityTracker.dayString(sample.date),
+           let next = goalStepToSuggest(fitting: timeAvailable) {
+            showGoalReminder(next, at: sample.date, scheduled: false)
+            return
+        }
         if persona == .coach { remindAtDesk() }
+    }
+
+    private func goalStepToSuggest(fitting seconds: TimeInterval) -> NextGoalStep? {
+        func fits(_ candidate: NextGoalStep) -> Bool {
+            let minutes = GoalStep.validEstimate(candidate.step.estimatedMinutes) ?? 1
+            return Double(minutes) * 60 <= seconds
+        }
+        if let pinned = goalBook.next {
+            return pinned.checkInAt == nil && fits(pinned) ? pinned : nil
+        }
+        return goalBook.firstPending(matching: fits)
+    }
+
+    private func showGoalReminder(_ next: NextGoalStep, at date: Date, scheduled: Bool) {
+        Prefs.lastGoalReminderDay = ActivityTracker.dayString(date)
+        let text = [next.step.title, next.step.estimateLabel].compactMap { $0 }.joined(separator: "\n")
+        let action = scheduled ? "checks in on \(next.goalTitle)" : "suggests a step for \(next.goalTitle)"
+        let secondary: (String, NudgeAction) = scheduled ? ("In an hour", .postponeGoalCheckIn(next.reference)) : ("Not today", .dismiss)
+        overlay = .bubble(Nudge(mood: .alert, action: action, text: text,
+                                primary: ("See step", .reviewGoalStep(next.reference)), secondary: secondary))
+        autoDismiss(after: 30)
     }
 
     private static func isCodeEditor(_ bundle: String) -> Bool {
@@ -403,7 +452,7 @@ final class AppState: ObservableObject {
         // Don't interrupt someone mid-paste.
         if case .panel = overlay { return }
         if case .bubble(let nudge) = overlay,
-           nudge.primary.action == .highFive || nudge.primary.action == .openNextStep { return }
+           nudge.primary.action == .highFive || nudge.goalStep != nil { return }
         tracker.countNudge()
         let seconds = Double(e.minutes) * 60
         let miles = Format.miles(forSeconds: seconds)

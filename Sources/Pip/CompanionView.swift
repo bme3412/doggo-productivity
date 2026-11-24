@@ -146,11 +146,11 @@ struct CompanionView: View {
         case .none:
             EmptyView()
         case .bubble(let nudge):
-            ViewThatFits(in: .vertical) {
-                NudgeBubble(nudge: nudge) { state.perform($0) }
-                ScrollView { NudgeBubble(nudge: nudge) { state.perform($0) } }
+            if nudge.goalStep != nil {
+                goalBubble(nudge)
+            } else {
+                bubble(nudge).padding(alignEdge, 70)
             }
-            .padding(alignEdge, 70)
         case .menu:
             anchoredMenu
         case .panel(let page):
@@ -160,6 +160,29 @@ struct CompanionView: View {
             }
             .padding(alignEdge, 4)
         }
+    }
+
+    private func bubble(_ nudge: Nudge, tail: NudgeBubble.Tail? = nil) -> some View {
+        let bubble = NudgeBubble(nudge: nudge, tail: tail) { state.perform($0) }
+        return ViewThatFits(in: .vertical) {
+            bubble.fixedSize(horizontal: false, vertical: true)
+            ScrollView { bubble }
+        }
+    }
+
+    private func goalBubble(_ nudge: Nudge) -> some View {
+        let dogs = appearance.visibleDogs
+        let guide = dogs.firstIndex { $0.id == appearance.guide.id } ?? 0
+        let dogsWidth = DogView.groupSize(count: dogs.count).width
+        let width = max(dogsWidth, NudgeBubble.width)
+        let groupOffset = alignment.horizontal == .trailing ? width - dogsWidth : 0
+        let speaker = groupOffset + 135 + CGFloat(guide) * DogView.companionSpacing
+        let leading = min(width - NudgeBubble.width, max(0, speaker - NudgeBubble.width / 2))
+        let tail = NudgeBubble.Tail(x: speaker - leading, edge: overlayEdge)
+        return bubble(nudge, tail: tail)
+            .frame(width: NudgeBubble.width)
+            .offset(x: leading)
+            .frame(width: width, alignment: .leading)
     }
 
     private var anchoredMenu: some View {
@@ -257,12 +280,20 @@ private struct DogMouseArea: NSViewRepresentable {
 }
 
 struct NudgeBubble: View {
+    struct Tail {
+        let x: CGFloat
+        let edge: Edge
+    }
+
+    static let width: CGFloat = 280
     var nudge: Nudge
+    var tail: Tail?
     var perform: (NudgeAction) -> Void
 
     var body: some View {
+        let fill = tail == nil ? Color.white : Theme.paper
         VStack(alignment: .leading, spacing: 8) {
-            Text(nudge.action).font(.system(size: 11).italic()).foregroundStyle(Theme.faint)
+            Text(nudge.action).font(.system(size: 11).italic()).foregroundStyle(Theme.muted)
             Text(nudge.text).font(.system(size: 13)).foregroundStyle(Theme.ink)
                 .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 6) {
@@ -274,13 +305,28 @@ struct NudgeBubble: View {
             }
         }
         .padding(14)
-        .frame(width: 280, alignment: .leading)
+        .frame(width: Self.width, alignment: .leading)
         .background(
             UnevenRoundedRectangle(topLeadingRadius: 16, bottomLeadingRadius: 16,
                                    bottomTrailingRadius: 4, topTrailingRadius: 16)
-                .fill(Color.white)
+                .fill(fill)
                 .shadow(color: .black.opacity(0.25), radius: 14, y: 6)
         )
+        .overlay(alignment: tail?.edge == .top ? .topLeading : .bottomLeading) {
+            if let tail {
+                Path { path in
+                    path.move(to: .zero)
+                    path.addLine(to: CGPoint(x: 16, y: 0))
+                    path.addLine(to: CGPoint(x: 8, y: 8))
+                    path.closeSubpath()
+                }
+                .fill(fill)
+                .frame(width: 16, height: 8)
+                .rotationEffect(.degrees(tail.edge == .top ? 180 : 0))
+                .offset(x: tail.x - 8, y: tail.edge == .top ? -7 : 7)
+                .allowsHitTesting(false)
+            }
+        }
     }
 }
 

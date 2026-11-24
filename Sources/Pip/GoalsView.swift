@@ -42,8 +42,8 @@ struct GoalsView: View {
         .onAppear { if selection == nil { selection = book.plans.first?.id } }
         .sheet(item: $edit) { editor in GoalTextEditor(edit: editor) }
         .sheet(item: $proposal) { draft in
-            GoalProposalEditor(proposal: draft) { titles in
-                book.addSteps(titles, to: draft.goal.id, replacing: draft.original)
+            GoalProposalEditor(proposal: draft) { steps in
+                book.addSteps(steps, to: draft.goal.id, replacing: draft.original)
             }
         }
     }
@@ -70,7 +70,9 @@ struct GoalsView: View {
                 Text(plan.title).font(.title2.weight(.semibold)).textSelection(.enabled)
                 Spacer(minLength: 8)
                 Button("Rename") {
-                    edit = GoalTextEdit(title: "Rename goal", text: plan.title) { book.renameGoal(plan.id, title: $0) }
+                    edit = GoalTextEdit(title: "Rename goal", text: plan.title) { title, _ in
+                        book.renameGoal(plan.id, title: title)
+                    }
                 }
             }
 
@@ -83,7 +85,9 @@ struct GoalsView: View {
                 Button("Suggest steps") { suggest(for: plan) }
                     .buttonStyle(.borderedProminent).disabled(requesting)
                 Button("Add a step") {
-                    edit = GoalTextEdit(title: "Add a step", text: "") { book.addSteps([$0], to: plan.id) }
+                    edit = GoalTextEdit(title: "Add a step", text: "", includesEstimate: true) { title, minutes in
+                        book.addSteps([GoalStep(title: title, estimatedMinutes: minutes)], to: plan.id)
+                    }
                 }
                 if requesting { ProgressView().controlSize(.small).accessibilityLabel("Preparing suggestions") }
             }
@@ -132,6 +136,9 @@ struct GoalsView: View {
                 } else if step.status == .skipped {
                     Text("Skipped").font(.caption).foregroundStyle(.secondary)
                 }
+                if let estimate = step.estimateLabel {
+                    Text(estimate).font(.caption).foregroundStyle(.secondary)
+                }
             }
             Spacer(minLength: 4)
             if step.status == .pending && !isNext {
@@ -140,7 +147,10 @@ struct GoalsView: View {
 
             Menu {
                 Button("Edit step") {
-                    edit = GoalTextEdit(title: "Edit step", text: step.title) { book.editStep(ref, title: $0) }
+                    edit = GoalTextEdit(title: "Edit step", text: step.title, includesEstimate: true,
+                                        estimatedMinutes: step.estimatedMinutes) { title, minutes in
+                        book.editStep(ref, title: title, estimatedMinutes: minutes)
+                    }
                 }
                 Button("Move up") { book.moveStep(ref, by: -1) }.disabled(index == 0)
                 Button("Move down") { book.moveStep(ref, by: 1) }.disabled(index == plan.steps.count - 1)
@@ -180,8 +190,8 @@ struct GoalsView: View {
         Task {
             defer { requesting = false }
             do {
-                let titles = try await GoalPlanner.suggest(for: plan, context: context, breakingDown: step)
-                proposal = GoalProposal(goal: plan, original: step, titles: titles)
+                let steps = try await GoalPlanner.suggest(for: plan, context: context, breakingDown: step)
+                proposal = GoalProposal(goal: plan, original: step, steps: steps)
             } catch {
                 requestError = error.localizedDescription
             }
@@ -193,18 +203,22 @@ private struct GoalTextEdit: Identifiable {
     let id = UUID()
     let title: String
     let text: String
-    let save: (String) -> Bool
+    var includesEstimate = false
+    var estimatedMinutes: Int?
+    let save: (String, Int?) -> Bool
 }
 
 private struct GoalTextEditor: View {
     @Environment(\.dismiss) private var dismiss
     let edit: GoalTextEdit
     @State private var text: String
+    @State private var minutes: Int?
     @State private var failed = false
 
     init(edit: GoalTextEdit) {
         self.edit = edit
         _text = State(initialValue: edit.text)
+        _minutes = State(initialValue: edit.estimatedMinutes)
     }
 
     var body: some View {
@@ -212,12 +226,15 @@ private struct GoalTextEditor: View {
             Text(edit.title).font(.headline)
             TextField(edit.title, text: $text, axis: .vertical).textFieldStyle(.roundedBorder)
                 .lineLimit(1...4)
+            if edit.includesEstimate {
+                LabeledContent("Time estimate") { GoalEstimateField(minutes: $minutes) }
+            }
             if failed { Text("Doggo couldn’t save this change. Check the text and try again.").foregroundStyle(.red) }
             HStack {
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
                 Button("Save") {
-                    if edit.save(text) { dismiss() }
+                    if edit.save(text, minutes) { dismiss() }
                     else { failed = true }
                 }
                 .keyboardShortcut(.defaultAction)
@@ -228,45 +245,63 @@ private struct GoalTextEditor: View {
     }
 }
 
+private struct GoalEstimateField: View {
+    @Binding var minutes: Int?
+
+    var body: some View {
+        HStack(spacing: 4) {
+            TextField("—", value: $minutes, format: .number.grouping(.never))
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 52)
+                .accessibilityLabel("Estimated minutes")
+                .help("Optional time estimate in minutes")
+            Text("min").font(.caption).foregroundStyle(.secondary).accessibilityHidden(true)
+        }
+    }
+}
+
 private struct GoalProposal: Identifiable {
     let id = UUID()
     let goal: GoalPlan
     let original: GoalStep?
-    let titles: [String]
+    let steps: [GoalStep]
 }
 
 private struct GoalProposalEditor: View {
     @Environment(\.dismiss) private var dismiss
     let proposal: GoalProposal
-    let apply: ([String]) -> Bool
-    @State private var titles: [String]
+    let apply: ([GoalStep]) -> Bool
+    @State private var steps: [GoalStep]
     @State private var failed = false
 
-    init(proposal: GoalProposal, apply: @escaping ([String]) -> Bool) {
+    init(proposal: GoalProposal, apply: @escaping ([GoalStep]) -> Bool) {
         self.proposal = proposal
         self.apply = apply
-        _titles = State(initialValue: proposal.titles)
+        _steps = State(initialValue: proposal.steps)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text(proposal.original == nil ? "Review suggested steps" : "Review smaller steps").font(.headline)
             Text(proposal.original?.title ?? proposal.goal.title).foregroundStyle(.secondary)
-            ForEach(titles.indices, id: \.self) { index in
-                TextField("Suggested step \(index + 1)", text: $titles[index], axis: .vertical)
-                    .textFieldStyle(.roundedBorder).lineLimit(1...3)
+            ForEach(steps.indices, id: \.self) { index in
+                HStack(alignment: .top, spacing: 8) {
+                    TextField("Suggested step \(index + 1)", text: $steps[index].title, axis: .vertical)
+                        .textFieldStyle(.roundedBorder).lineLimit(1...3)
+                    GoalEstimateField(minutes: $steps[index].estimatedMinutes)
+                }
             }
-            Text("Edit or clear any suggestion before adding it.").font(.caption).foregroundStyle(.secondary)
+            Text("Edit the steps and time estimates before adding them.").font(.caption).foregroundStyle(.secondary)
             if failed { Text("Doggo couldn’t apply these steps. Check your current plan and try again.").foregroundStyle(.red) }
             HStack {
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
                 Button(proposal.original == nil ? "Add to plan" : "Replace step") {
-                    if apply(titles) { dismiss() }
+                    if apply(steps) { dismiss() }
                     else { failed = true }
                 }
                 .keyboardShortcut(.defaultAction)
-                .disabled(titles.allSatisfy { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
+                .disabled(steps.allSatisfy { $0.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
             }
         }
         .frame(width: 430).padding(20)
@@ -299,6 +334,8 @@ private struct GoalCheckInEditor: View {
                 }
                 .disabled(date <= Date())
             }
+            Text("Check-ins wait until you’re active and within the hours set under Goal reminders in Settings.")
+                .font(.caption).foregroundStyle(.secondary)
         }
     }
 }
@@ -308,11 +345,15 @@ struct NextGoalStepPanel: View {
     @ObservedObject var book: GoalBook
 
     var body: some View {
+        let reminded = state.remindedGoalStep.flatMap { book.pendingStep(for: $0) }
         VStack(alignment: .leading, spacing: 10) {
-            if let action = book.next ?? book.firstPending {
+            if let action = reminded ?? book.next ?? book.firstPending {
                 Text(action.goalTitle).font(.system(size: 12)).foregroundStyle(Theme.muted)
                 Text(action.step.title).font(.system(size: 16, weight: .semibold))
                     .fixedSize(horizontal: false, vertical: true)
+                if let estimate = action.step.estimateLabel {
+                    Text(estimate).font(.system(size: 12)).foregroundStyle(Theme.muted)
+                }
                 if let scheduled = action.checkInAt {
                     Text("Check-in \(scheduled.formatted(date: .abbreviated, time: .shortened))")
                         .font(.system(size: 12)).foregroundStyle(Theme.muted)
@@ -320,7 +361,7 @@ struct NextGoalStepPanel: View {
                 HStack(spacing: 6) {
                     PillButton(title: "Goals") { state.perform(.openGoals) }
                     Spacer()
-                    if book.next != nil {
+                    if reminded != nil || book.next?.reference == action.reference {
                         PillButton(title: "Mark done", primary: true) { state.finishGoalStep(action.reference) }
                     } else {
                         PillButton(title: "Pick this step", primary: true) { book.pick(action.reference) }

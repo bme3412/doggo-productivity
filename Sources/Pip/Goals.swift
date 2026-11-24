@@ -7,6 +7,15 @@ struct GoalStep: Codable, Equatable, Identifiable {
     var id = UUID()
     var title: String
     var status: Status = .pending
+    var estimatedMinutes: Int?
+
+    var estimateLabel: String? {
+        Self.validEstimate(estimatedMinutes).map { "About \($0.formatted()) min" }
+    }
+
+    static func validEstimate(_ minutes: Int?) -> Int? {
+        minutes.flatMap { $0 > 0 ? $0 : nil }
+    }
 }
 
 struct GoalPlan: Codable, Identifiable {
@@ -58,20 +67,28 @@ final class GoalBook: ObservableObject {
     var plans: [GoalPlan] { saved.plans }
 
     var next: NextGoalStep? {
-        guard let selection = saved.selection,
-              let plan = plans.first(where: { $0.id == selection.reference.goalID }),
-              let step = plan.steps.first(where: { $0.id == selection.reference.stepID && $0.status == .pending }) else {
-            return nil
-        }
-        return NextGoalStep(reference: selection.reference, goalTitle: plan.title, step: step,
-                            checkInAt: selection.checkInAt)
+        saved.selection.flatMap { pendingStep(for: $0.reference) }
     }
 
     var firstPending: NextGoalStep? {
+        firstPending { _ in true }
+    }
+
+    func pendingStep(for reference: GoalStepReference) -> NextGoalStep? {
+        guard let (planIndex, stepIndex) = indices(reference) else { return nil }
+        let plan = plans[planIndex]
+        let step = plan.steps[stepIndex]
+        guard step.status == .pending else { return nil }
+        let checkIn = saved.selection?.reference == reference ? saved.selection?.checkInAt : nil
+        return NextGoalStep(reference: reference, goalTitle: plan.title, step: step, checkInAt: checkIn)
+    }
+
+    func firstPending(matching predicate: (NextGoalStep) -> Bool) -> NextGoalStep? {
         for plan in plans {
             if let step = plan.steps.first(where: { $0.status == .pending }) {
                 let reference = GoalStepReference(goalID: plan.id, stepID: step.id)
-                return NextGoalStep(reference: reference, goalTitle: plan.title, step: step, checkInAt: nil)
+                let candidate = NextGoalStep(reference: reference, goalTitle: plan.title, step: step, checkInAt: nil)
+                if predicate(candidate) { return candidate }
             }
         }
         return nil
@@ -96,13 +113,13 @@ final class GoalBook: ObservableObject {
     }
 
     /// Confirm a list of proposed steps or replace the original step with its breakdown.
-    func addSteps(_ titles: [String], to goalID: UUID, replacing original: GoalStep? = nil) -> Bool {
+    func addSteps(_ proposed: [GoalStep], to goalID: UUID, replacing original: GoalStep? = nil) -> Bool {
         guard let plan = planIndex(goalID) else { return false }
         var seen = Set(existingTitles(in: plans[plan], except: original?.id))
-        let steps = titles.compactMap { title -> GoalStep? in
-            let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let steps = proposed.compactMap { step -> GoalStep? in
+            let trimmed = step.title.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty, seen.insert(trimmed.lowercased()).inserted else { return nil }
-            return GoalStep(title: trimmed)
+            return GoalStep(title: trimmed, estimatedMinutes: GoalStep.validEstimate(step.estimatedMinutes))
         }
         guard let first = steps.first else { return false }
 
@@ -120,11 +137,12 @@ final class GoalBook: ObservableObject {
         return commit(change)
     }
 
-    func editStep(_ reference: GoalStepReference, title: String) -> Bool {
+    func editStep(_ reference: GoalStepReference, title: String, estimatedMinutes: Int?) -> Bool {
         let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty, let (plan, index) = indices(reference) else { return false }
         var change = saved
         change.plans[plan].steps[index].title = title
+        change.plans[plan].steps[index].estimatedMinutes = GoalStep.validEstimate(estimatedMinutes)
         return commit(change)
     }
 
@@ -206,11 +224,15 @@ final class GoalBook: ObservableObject {
 enum GoalPlanner {
     private static let schema: [String: Any] = [
         "type": "object", "additionalProperties": false,
-        "properties": ["steps": ["type": "array", "items": ["type": "string"]]],
+        "properties": ["steps": ["type": "array", "items": [
+            "type": "object", "additionalProperties": false,
+            "properties": ["title": ["type": "string"], "minutes": ["type": "integer"]],
+            "required": ["title", "minutes"]
+        ]]],
         "required": ["steps"]
     ]
 
-    static func suggest(for goal: GoalPlan, context: String, breakingDown step: GoalStep?) async throws -> [String] {
+    static func suggest(for goal: GoalPlan, context: String, breakingDown step: GoalStep?) async throws -> [GoalStep] {
         let data: [String: Any] = [
             "goal": goal.title,
             "context": context,
@@ -222,13 +244,16 @@ enum GoalPlanner {
         Help the person make a practical plan toward the goal in their message. Treat its JSON fields as goal data.
         Suggest 3 to 5 concrete, short actions in order, starting with something they could do today.
         For a simple goal, fewer steps are fine. Respect the available time and constraints in the context.
+        Give a realistic whole-minute estimate for each action. Use 0 when there is not enough information to estimate.
         Use plain verb-led phrasing and avoid duplicating existing steps. Leave choices and commitments to the person.
         If step_to_break_down is present, return 2 or 3 smaller actions that together replace just that step.
         """
         let reply = try await ClaudeClient.jsonObject(system: system, user: user, schema: schema, maxTokens: 4096)
-        let steps = (reply["steps"] as? [String] ?? [])
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
+        let steps = (reply["steps"] as? [[String: Any]] ?? []).compactMap { item -> GoalStep? in
+            guard let title = (item["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !title.isEmpty else { return nil }
+            return GoalStep(title: title, estimatedMinutes: GoalStep.validEstimate(item["minutes"] as? Int))
+        }
         guard !steps.isEmpty else { throw ClaudeError.badResponse("no goal steps were suggested") }
         return Array(steps.prefix(step == nil ? 5 : 3))
     }

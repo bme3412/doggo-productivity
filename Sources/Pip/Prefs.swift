@@ -106,6 +106,20 @@ enum Prefs {
         set { d.set(try? JSONEncoder().encode(newValue), forKey: "focusGoals") }
     }
 
+    static var goalReminders: GoalReminderSchedule {
+        get {
+            guard let data = d.data(forKey: "goalReminders"),
+                  let schedule = try? JSONDecoder().decode(GoalReminderSchedule.self, from: data) else { return .init() }
+            return schedule
+        }
+        set { d.set(try? JSONEncoder().encode(newValue), forKey: "goalReminders") }
+    }
+
+    static var lastGoalReminderDay: String? {
+        get { d.string(forKey: "lastGoalReminderDay") }
+        set { d.set(newValue, forKey: "lastGoalReminderDay") }
+    }
+
     static var walkStart: Date? {
         get { d.object(forKey: "walkStart") as? Date }
         set { d.set(newValue, forKey: "walkStart") }
