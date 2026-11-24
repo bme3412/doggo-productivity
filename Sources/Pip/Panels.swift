@@ -18,7 +18,9 @@ struct WardenPanel: View {
                 state.perform(.openWebsites)
             }
 
-            if distracted >= 60 { distractionSummary(distracted) }
+            if distracted >= 60 {
+                DistractionSummary(seconds: distracted, streakHost: tracker.streakHost, streakSeconds: tracker.streakSeconds)
+            }
             reminderControl
         }
     }
@@ -31,29 +33,73 @@ struct WardenPanel: View {
         case 0: "Daily streak goal met"
         default: "\(minutesToGoal) min to earn a streak day"
         }
+        return FocusSummaryCard(title: "Focus time", value: Format.duration(focused), metrics: [
+            .init(label: "Online", value: Format.duration(stats.webSeconds)),
+            .init(label: "Sites", value: stats.siteCount.formatted()),
+            .init(label: "Snoozes", value: stats.snoozes.formatted())
+        ], detail: streakText, streakProgress: progress)
+    }
+
+    private var reminderControl: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text("Warden reminders").font(.system(size: 12, weight: .semibold))
+            Picker("Warden reminders", selection: $state.level) {
+                ForEach(Strictness.allCases) { Text($0.title).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            Text(state.level.explanation)
+                .font(.system(size: 11)).foregroundStyle(Theme.muted)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+// MARK: - Activity report cards
+
+struct FocusSummaryCard: View {
+    struct Metric {
+        let label: String
+        let value: String
+    }
+
+    let title: String
+    let value: String
+    let metrics: [Metric]
+    var detail: String?
+    var streakProgress: Double?
+    var comparison: String?
+
+    var body: some View {
         let highlight = Color(hex: 0xD3E6B9)
 
-        return VStack(spacing: 0) {
+        VStack(spacing: 0) {
             HStack(spacing: 16) {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Focus time")
+                    Text(title)
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(highlight)
-                    Text(Format.duration(focused))
+                    Text(value)
                         .font(.system(size: 33, weight: .semibold, design: .rounded))
                         .monospacedDigit()
-                    Text(streakText)
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(highlight)
+                    if let detail {
+                        Text(detail)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(highlight)
+                    }
                 }
                 .accessibilityElement(children: .combine)
                 Spacer(minLength: 0)
                 ZStack {
-                    Circle().strokeBorder(.white.opacity(0.2), lineWidth: 4)
-                    Circle().trim(from: 0, to: progress)
-                        .stroke(highlight, style: StrokeStyle(lineWidth: 4, lineCap: .round))
-                        .rotationEffect(.degrees(-90))
-                        .padding(2)
+                    if let streakProgress {
+                        Circle().strokeBorder(.white.opacity(0.2), lineWidth: 4)
+                        Circle().trim(from: 0, to: streakProgress)
+                            .stroke(highlight, style: StrokeStyle(lineWidth: 4, lineCap: .round))
+                            .rotationEffect(.degrees(-90))
+                            .padding(2)
+                    } else {
+                        Circle().fill(.white.opacity(0.12))
+                    }
                     Image(systemName: "pawprint.fill")
                         .font(.system(size: 22, weight: .medium))
                         .foregroundStyle(highlight)
@@ -61,18 +107,27 @@ struct WardenPanel: View {
                 .frame(width: 54, height: 54)
                 .accessibilityHidden(true)
             }
+            .frame(minHeight: 74)
             .padding(.horizontal, 15)
             .padding(.vertical, 9)
             .foregroundStyle(Color.white)
             .background(LinearGradient(colors: [Color(hex: 0x305A49), Color(hex: 0x1C3C32)],
                                        startPoint: .topLeading, endPoint: .bottomTrailing))
 
-            HStack(spacing: 0) {
-                metric(Format.duration(stats.webSeconds), "Online")
-                Divider().frame(height: 23)
-                metric(stats.siteCount.formatted(), "Sites")
-                Divider().frame(height: 23)
-                metric(stats.snoozes.formatted(), "Snoozes")
+            VStack(alignment: .leading, spacing: 7) {
+                HStack(spacing: 0) {
+                    ForEach(metrics.indices, id: \.self) { index in
+                        if index > 0 { Divider().frame(height: 23) }
+                        metric(metrics[index])
+                    }
+                }
+                if let comparison {
+                    Divider().padding(.horizontal, 15)
+                    Text(comparison)
+                        .font(.system(size: 11)).foregroundStyle(Theme.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, 15)
+                }
             }
             .padding(.vertical, 7)
             .background(Color(hex: 0xF1EBDD))
@@ -80,19 +135,25 @@ struct WardenPanel: View {
         .clipShape(RoundedRectangle(cornerRadius: 13))
     }
 
-    private func metric(_ value: String, _ label: String) -> some View {
+    private func metric(_ metric: Metric) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(value)
+            Text(metric.value)
                 .font(.system(size: 17, weight: .semibold, design: .rounded))
                 .monospacedDigit()
-            Text(label).font(.system(size: 11)).foregroundStyle(Theme.muted)
+            Text(metric.label).font(.system(size: 11)).foregroundStyle(Theme.muted)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 15)
         .accessibilityElement(children: .combine)
     }
+}
 
-    private func distractionSummary(_ seconds: TimeInterval) -> some View {
+struct DistractionSummary: View {
+    let seconds: TimeInterval
+    var streakHost: String?
+    var streakSeconds: TimeInterval = 0
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 7) {
             HStack(spacing: 10) {
                 Image(systemName: "figure.run")
@@ -108,8 +169,8 @@ struct WardenPanel: View {
                 }
             }
             .foregroundStyle(Theme.amberText)
-            if let host = tracker.streakHost, tracker.streakSeconds >= 60 {
-                Text("Current streak · \(Format.duration(tracker.streakSeconds)) on \(host)")
+            if let host = streakHost, streakSeconds >= 60 {
+                Text("Current streak · \(Format.duration(streakSeconds)) on \(host)")
                     .font(.system(size: 11)).foregroundStyle(Theme.muted)
                     .lineLimit(2).help(host)
             }
@@ -118,19 +179,5 @@ struct WardenPanel: View {
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(hex: 0xF9EFDF), in: RoundedRectangle(cornerRadius: 11))
-    }
-
-    private var reminderControl: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            Text("Warden reminders").font(.system(size: 12, weight: .semibold))
-            Picker("Warden reminders", selection: $state.level) {
-                ForEach(Strictness.allCases) { Text($0.title).tag($0) }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            Text(state.level.explanation)
-                .font(.system(size: 11)).foregroundStyle(Theme.muted)
-                .fixedSize(horizontal: false, vertical: true)
-        }
     }
 }

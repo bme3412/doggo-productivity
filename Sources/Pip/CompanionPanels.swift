@@ -38,32 +38,25 @@ struct WeeklyReportPanel: View {
     var openWebsites: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 13) {
+        VStack(alignment: .leading, spacing: 10) {
             HStack {
                 let date = Date.FormatStyle().month(.abbreviated).day()
                 Text("\(report.start.formatted(date)) – \(report.through.formatted(date))")
-                    .font(.system(size: 12)).foregroundStyle(Theme.muted)
+                    .font(.system(size: 12, weight: .medium)).foregroundStyle(Theme.muted)
                 Spacer()
                 PillButton(title: report.isPrevious ? "This week" : "Last week", action: changeWeek)
+                    .background(Theme.trail.opacity(0.09), in: Capsule())
             }
-            HStack(spacing: 24) {
-                stat(Format.duration(report.webSeconds), "Online")
-                stat(report.longestStretch.map { Format.duration($0) } ?? "—", "Longest focus stretch")
-            }
-            Text(trend)
-                .font(.system(size: 12)).foregroundStyle(Theme.muted)
-                .fixedSize(horizontal: false, vertical: true)
+            FocusSummaryCard(title: "Longest focus stretch",
+                             value: report.longestStretch.map { Format.duration($0) } ?? "—", metrics: [
+                .init(label: "Online", value: Format.duration(report.webSeconds)),
+                .init(label: "Sites", value: report.topSites.count.formatted())
+            ], detail: report.longestStretch == nil ? "No focus data for this period" : nil, comparison: trend)
 
-            Divider()
             TopWebsiteRows(sites: report.topSites, openWebsites: openWebsites)
 
             if report.distractingSeconds >= 60 {
-                Divider()
-                Text("\(Format.duration(report.distractingSeconds)) on distracting sites")
-                    .font(.system(size: 12, weight: .semibold))
-                Text("We could have run \(Format.miles(forSeconds: report.distractingSeconds)) miles.")
-                    .font(.system(size: 12)).foregroundStyle(Theme.amberText)
-                GoalComparisons(seconds: report.distractingSeconds)
+                DistractionSummary(seconds: report.distractingSeconds)
             }
         }
     }
@@ -74,13 +67,6 @@ struct WeeklyReportPanel: View {
         if report.priorWebSeconds == 0 { return "No browsing logged in \(comparison)." }
         if abs(change) < 60 { return "About the same time online as \(comparison)." }
         return "\(Format.duration(abs(change))) \(change < 0 ? "less" : "more") online than \(comparison)."
-    }
-
-    private func stat(_ value: String, _ label: String) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(value).font(.system(size: 24, weight: .semibold)).monospacedDigit()
-            Text(label).font(.system(size: 11)).foregroundStyle(Theme.muted)
-        }
     }
 }
 
