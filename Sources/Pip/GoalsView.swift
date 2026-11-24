@@ -17,28 +17,31 @@ struct GoalsView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 0) {
+        VStack(spacing: 12) {
+            HStack(alignment: .top, spacing: 12) {
                 sidebar
-                Divider()
                 if let plan = selectedPlan {
                     ScrollView {
-                        planDetail(plan).padding(24).frame(maxWidth: 680, alignment: .leading)
+                        planDetail(plan).frame(maxWidth: 680, alignment: .leading)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
+                    .id(plan.id)
                 } else {
                     ContentUnavailableView("Set a goal", systemImage: "flag",
                                            description: Text("Start with something you want to do, like going for a run."))
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .doggoWindowCard()
                 }
             }
             if let error = book.storageError {
-                Divider()
                 Label(error, systemImage: "exclamationmark.triangle")
-                    .font(.callout).foregroundStyle(.red).padding(10)
+                    .font(.callout).foregroundStyle(.red)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
+        .padding(16)
+        .background(LibraryColors.paper)
+        .tint(LibraryColors.accent)
         .onAppear { if selection == nil { selection = book.plans.first?.id } }
         .sheet(item: $edit) { editor in GoalTextEditor(edit: editor) }
         .sheet(item: $proposal) { draft in
@@ -49,33 +52,80 @@ struct GoalsView: View {
     }
 
     private var sidebar: some View {
-        VStack(spacing: 8) {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Your goals").font(.system(size: 14, weight: .semibold))
+                .padding(.horizontal, 12)
+                .padding(.top, 12)
             HStack(spacing: 6) {
-                TextField("New goal", text: $newGoal).onSubmit(addGoal)
+                TextField("New goal", text: $newGoal).textFieldStyle(.roundedBorder).onSubmit(addGoal)
                 Button("Add", action: addGoal)
+                    .buttonStyle(.borderedProminent)
+                    .tint(Theme.trail)
                     .disabled(newGoal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
-            .padding([.horizontal, .top], 12)
+            .padding(.horizontal, 12)
             List(book.plans, selection: $selection) { plan in
-                Label(plan.title, systemImage: "flag").lineLimit(2).tag(plan.id)
+                Label {
+                    Text(plan.title)
+                } icon: {
+                    Image(systemName: "flag")
+                        .foregroundStyle(selection == plan.id ? Color.primary : LibraryColors.accent)
+                }
+                .lineLimit(2).tag(plan.id)
             }
-            .listStyle(.sidebar)
+            .listStyle(.inset)
+            .scrollContentBackground(.hidden)
         }
         .frame(width: 215)
+        .doggoWindowCard()
     }
 
     private func planDetail(_ plan: GoalPlan) -> some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(plan.title).font(.title2.weight(.semibold)).textSelection(.enabled)
+        VStack(alignment: .leading, spacing: 12) {
+            planSummary(plan)
+            planningControls(plan)
+            if !plan.steps.isEmpty { stepsCard(plan) }
+            if let next = book.next, next.reference.goalID == plan.id {
+                GoalCheckInEditor(book: book, next: next)
+                    .id(next.reference.stepID)
+                    .padding(14)
+                    .doggoWindowCard()
+            }
+        }
+    }
+
+    private func planSummary(_ plan: GoalPlan) -> some View {
+        VStack(spacing: 0) {
+            DoggoWindowHeader {
+                Text(plan.title).textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            HStack(spacing: 10) {
+                if !plan.steps.isEmpty {
+                    let done = plan.steps.filter { $0.status == .done }.count
+                    let pending = plan.steps.filter { $0.status == .pending }.count
+                    Text("\(done.formatted()) done")
+                    Divider().frame(height: 12)
+                    Text("\(pending.formatted()) to do")
+                }
                 Spacer(minLength: 8)
                 Button("Rename") {
                     edit = GoalTextEdit(title: "Rename goal", text: plan.title) { title, _ in
                         book.renameGoal(plan.id, title: title)
                     }
                 }
+                .controlSize(.small)
             }
+            .font(.system(size: 12, weight: .medium))
+            .padding(.horizontal, 14)
+            .padding(.vertical, 9)
+            .background(LibraryColors.shelf)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 13))
+    }
 
+    private func planningControls(_ plan: GoalPlan) -> some View {
+        VStack(alignment: .leading, spacing: 9) {
             TextField("Context for suggestions, e.g. I have ten minutes today", text: Binding(
                 get: { contexts[plan.id, default: ""] }, set: { contexts[plan.id] = $0 }
             ), axis: .vertical)
@@ -83,7 +133,7 @@ struct GoalsView: View {
 
             HStack(spacing: 10) {
                 Button("Suggest steps") { suggest(for: plan) }
-                    .buttonStyle(.borderedProminent).disabled(requesting)
+                    .buttonStyle(.borderedProminent).tint(Theme.trail).disabled(requesting)
                 Button("Add a step") {
                     edit = GoalTextEdit(title: "Add a step", text: "", includesEstimate: true) { title, minutes in
                         book.addSteps([GoalStep(title: title, estimatedMinutes: minutes)], to: plan.id)
@@ -96,21 +146,22 @@ struct GoalsView: View {
             if let error = requestError {
                 Text(error).font(.callout).foregroundStyle(.red).textSelection(.enabled)
             }
+        }
+        .padding(14)
+        .doggoWindowCard()
+    }
 
-            if !plan.steps.isEmpty {
-                Divider()
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(Array(plan.steps.enumerated()), id: \.element.id) { index, step in
-                        stepRow(step, in: plan, index: index)
-                        if index < plan.steps.count - 1 { Divider() }
-                    }
-                }
-            }
-            if let next = book.next, next.reference.goalID == plan.id {
-                Divider()
-                GoalCheckInEditor(book: book, next: next).id(next.reference.stepID)
+    private func stepsCard(_ plan: GoalPlan) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Steps").font(.system(size: 14, weight: .semibold))
+                .padding(.horizontal, 14)
+                .padding(.vertical, 11)
+            ForEach(Array(plan.steps.enumerated()), id: \.element.id) { index, step in
+                Divider().padding(.horizontal, 14)
+                stepRow(step, in: plan, index: index)
             }
         }
+        .doggoWindowCard()
     }
 
     private func stepRow(_ step: GoalStep, in plan: GoalPlan, index: Int) -> some View {
@@ -122,7 +173,7 @@ struct GoalsView: View {
                 else { book.setStatus(.pending, for: ref) }
             } label: {
                 Image(systemName: statusIcon(step.status))
-                    .foregroundStyle(step.status == .done ? Theme.trail : .secondary)
+                    .foregroundStyle(step.status == .done ? LibraryColors.accent : .secondary)
             }
             .buttonStyle(.plain)
             .accessibilityLabel(step.status == .pending ? "Mark \(step.title) done" : "Restore \(step.title)")
@@ -132,7 +183,7 @@ struct GoalsView: View {
                     .strikethrough(step.status == .done)
                     .fixedSize(horizontal: false, vertical: true)
                 if isNext {
-                    Label("Next step", systemImage: "pin.fill").font(.caption).foregroundStyle(Theme.trail)
+                    Label("Next step", systemImage: "pin.fill").font(.caption).foregroundStyle(LibraryColors.accent)
                 } else if step.status == .skipped {
                     Text("Skipped").font(.caption).foregroundStyle(.secondary)
                 }
@@ -165,7 +216,9 @@ struct GoalsView: View {
             }
             .menuStyle(.borderlessButton).fixedSize()
         }
+        .padding(.horizontal, 14)
         .padding(.vertical, 10)
+        .background(isNext ? LibraryColors.accent.opacity(0.1) : .clear)
     }
 
     private func statusIcon(_ status: GoalStep.Status) -> String {
@@ -237,11 +290,14 @@ private struct GoalTextEditor: View {
                     if edit.save(text, minutes) { dismiss() }
                     else { failed = true }
                 }
+                .buttonStyle(.borderedProminent).tint(Theme.trail)
                 .keyboardShortcut(.defaultAction)
                 .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
         .frame(width: 360).padding(20)
+        .background(LibraryColors.paper)
+        .tint(LibraryColors.accent)
     }
 }
 
@@ -300,11 +356,14 @@ private struct GoalProposalEditor: View {
                     if apply(steps) { dismiss() }
                     else { failed = true }
                 }
+                .buttonStyle(.borderedProminent).tint(Theme.trail)
                 .keyboardShortcut(.defaultAction)
                 .disabled(steps.allSatisfy { $0.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
             }
         }
         .frame(width: 430).padding(20)
+        .background(LibraryColors.paper)
+        .tint(LibraryColors.accent)
     }
 }
 

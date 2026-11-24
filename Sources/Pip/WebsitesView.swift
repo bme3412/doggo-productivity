@@ -37,7 +37,7 @@ struct WebsitesView: View {
                 ContentUnavailableView(search.isEmpty ? "No websites in this range" : "No matching websites",
                                        systemImage: "safari")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .websiteCard()
+                    .doggoWindowCard()
             } else {
                 HSplitView {
                     websiteList(sites)
@@ -108,7 +108,7 @@ struct WebsitesView: View {
 
             table(sites)
         }
-        .websiteCard()
+        .doggoWindowCard()
     }
 
     private func table(_ sites: [SiteTime]) -> some View {
@@ -173,22 +173,11 @@ private struct WebsiteDetail: View {
 
     private var summary: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 12) {
-                Text(site.host).font(.system(size: 20, weight: .semibold))
+            DoggoWindowHeader {
+                Text(site.host)
                     .textSelection(.enabled).help(site.host)
                     .lineLimit(2)
-                Spacer(minLength: 0)
-                Image(systemName: "pawprint.fill")
-                    .font(.system(size: 18, weight: .medium))
-                    .foregroundStyle(Theme.reportHighlight)
-                    .frame(width: 40, height: 40)
-                    .background(.white.opacity(0.12), in: Circle())
-                    .accessibilityHidden(true)
             }
-            .padding(.horizontal, 15)
-            .padding(.vertical, 12)
-            .foregroundStyle(Color.white)
-            .background(Theme.reportGradient)
 
             HStack(spacing: 0) {
                 metric("Visits") { VisitCountText(site: site) }
@@ -222,7 +211,7 @@ private struct WebsiteDetail: View {
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
         }
-        .websiteCard()
+        .doggoWindowCard()
     }
 
     private func metric<V: View>(_ title: String, @ViewBuilder value: () -> V) -> some View {
@@ -250,15 +239,6 @@ private struct WebsiteDetail: View {
 
     private func dateLabel(_ key: String) -> String {
         Self.dateParser.date(from: key)?.formatted(.dateTime.month(.abbreviated).day().year()) ?? key
-    }
-}
-
-private extension View {
-    func websiteCard() -> some View {
-        let shape = RoundedRectangle(cornerRadius: 12)
-        return background(Color(nsColor: .textBackgroundColor), in: shape)
-            .clipShape(shape)
-            .overlay { shape.strokeBorder(LibraryColors.line.opacity(0.8)).allowsHitTesting(false) }
     }
 }
 

@@ -327,8 +327,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                   styleMask: [.titled, .closable, .miniaturizable, .resizable],
                                   backing: .buffered, defer: false)
             window.title = "Doggo Websites"
-            window.titlebarAppearsTransparent = true
-            window.backgroundColor = NSColor(LibraryColors.paper)
+            applyWindowPalette(to: window)
             window.isReleasedWhenClosed = false
             window.contentMinSize = NSSize(width: 730, height: 390)
             window.contentView = NSHostingView(rootView: WebsitesView(tracker: state.tracker))
@@ -357,10 +356,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func showGoals() {
         if goalsWindow == nil {
-            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 770, height: 565),
+            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 770, height: 620),
                              styleMask: [.titled, .closable, .miniaturizable, .resizable],
                              backing: .buffered, defer: false)
             w.title = "Doggo Goals"
+            applyWindowPalette(to: w)
             w.isReleasedWhenClosed = false
             w.minSize = NSSize(width: 660, height: 440)
             w.contentView = NSHostingView(rootView: GoalsView(state: state, book: state.goalBook))
@@ -393,6 +393,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                              styleMask: [.titled, .closable],
                              backing: .buffered, defer: false)
             w.title = "Doggo Settings"
+            applyWindowPalette(to: w)
             w.isReleasedWhenClosed = false
             w.contentView = NSHostingView(rootView: SettingsView())
             w.center()
@@ -400,5 +401,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         NSApp.activate(ignoringOtherApps: true)
         settingsWindow?.makeKeyAndOrderFront(nil)
+    }
+
+    private func applyWindowPalette(to window: NSWindow) {
+        window.titlebarAppearsTransparent = true
+        window.backgroundColor = NSColor(LibraryColors.paper)
     }
 }

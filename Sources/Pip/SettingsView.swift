@@ -14,94 +14,168 @@ struct SettingsView: View {
     @State private var saved = false
 
     var body: some View {
-        Form {
-            Section("Claude") {
-                SecureField(hasKey ? "Key saved. Paste a new one to replace it" : "Anthropic API key (sk-ant-…)", text: $apiKey)
-                HStack {
-                    Button("Save key") {
-                        Keychain.set(apiKey.trimmingCharacters(in: .whitespacesAndNewlines), account: "anthropic")
-                        apiKey = ""
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(spacing: 12) {
+                    goalReminderSettings
+                    claudeSettings
+                    wardenSettings
+                    siteSettings
+                    focusGoalSettings
+                }
+                .padding(16)
+            }
+            saveBar
+        }
+        .labeledContentStyle(SettingsRowStyle())
+        .textFieldStyle(.roundedBorder)
+        .tint(LibraryColors.accent)
+        .background(LibraryColors.paper)
+        .frame(width: 520, height: 620)
+    }
+
+    private var goalReminderSettings: some View {
+        card("Goal reminders", highlighted: true) {
+            LabeledContent("Suggest a step once a day") {
+                Toggle("Suggest a step once a day", isOn: $goalReminders.automatic)
+                    .toggleStyle(.switch).labelsHidden()
+            }
+            Divider()
+            reminderWindow("Weekdays", window: $goalReminders.weekdays)
+            reminderWindow("Weekends", window: $goalReminders.weekends)
+            Text("Choose the hours you’re available. Doggo waits for these hours for scheduled check-ins too. Set both times the same to skip those days.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private var claudeSettings: some View {
+        card("Claude") {
+            SecureField(hasKey ? "Paste a new key to replace the saved one" : "Anthropic API key (sk-ant-…)", text: $apiKey)
+            HStack {
+                Button("Save key") {
+                    Keychain.set(apiKey.trimmingCharacters(in: .whitespacesAndNewlines), account: "anthropic")
+                    apiKey = ""
+                    hasKey = Prefs.apiKey != nil
+                }
+                .disabled(apiKey.trimmingCharacters(in: .whitespaces).isEmpty)
+                if hasKey {
+                    Button("Remove key", role: .destructive) {
+                        Keychain.set("", account: "anthropic")
                         hasKey = Prefs.apiKey != nil
                     }
-                    .disabled(apiKey.trimmingCharacters(in: .whitespaces).isEmpty)
-                    if hasKey {
-                        Button("Remove key", role: .destructive) {
-                            Keychain.set("", account: "anthropic")
-                            hasKey = Prefs.apiKey != nil
-                        }
-                    }
-                    Spacer()
-                    Text(hasKey ? "Key stored in your Keychain" : "No key yet").font(.caption).foregroundStyle(.secondary)
                 }
-                TextField("Model", text: $model)
-                Text("Get a key at console.anthropic.com. Doggo sends the content needed for transcript organization, library questions, or goal suggestions when you request that action.")
-                    .font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Text(hasKey ? "Key stored in your Keychain" : "No key yet").font(.caption).foregroundStyle(.secondary)
             }
-
-            Section("Goal reminders") {
-                Toggle("Suggest a step once a day", isOn: $goalReminders.automatic)
-                reminderWindow("Weekdays", window: $goalReminders.weekdays)
-                reminderWindow("Weekends", window: $goalReminders.weekends)
-                Text("Choose the hours you’re available. Doggo waits for these hours for scheduled check-ins too. Set both times the same to skip those days.")
-                    .font(.caption).foregroundStyle(.secondary)
+            Divider()
+            LabeledContent("Model") {
+                TextField("Model", text: $model).labelsHidden().frame(width: 225)
             }
-
-            Section("Warden: when the dog reacts") {
-                Stepper("Sigh after \(sigh) minutes", value: $sigh, in: 1...120)
-                Stepper("Fetch after \(fetch) minutes", value: $fetch, in: 1...180)
-                Stepper("Bark (closes the tab) after \(bark) minutes", value: $bark, in: 1...240)
-                Stepper("Your running pace: \(Int(pace)) min per mile", value: $pace, in: 5...20, step: 1)
-                Text("Times count continuous minutes on distracting sites. Leaving for less than a minute doesn’t reset the streak; 2 minutes with no keyboard or mouse does.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-
-            Section("Distracting sites (one per line; subdomains count)") {
-                TextEditor(text: $domains)
-                    .font(.system(.body, design: .monospaced))
-                    .frame(height: 140)
-                Text("Walk me redirects distracting tabs in supported browsers for 25 minutes. Doggo needs Automation access to the browser.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-
-            Section("Focus goals") {
-                ForEach($goals) { $goal in
-                    let id = goal.id
-                    VStack(alignment: .leading, spacing: 7) {
-                        HStack {
-                            TextField("Goal, e.g. French practice", text: $goal.name)
-                            Button {
-                                goals.removeAll { $0.id == id }
-                            } label: {
-                                Image(systemName: "minus.circle")
-                            }
-                            .buttonStyle(.borderless)
-                            .accessibilityLabel("Remove goal")
-                        }
-                        HStack {
-                            TextField("Units, e.g. Duolingo lessons", text: $goal.units)
-                            TextField("Minutes", value: $goal.minutesPerUnit, format: .number.grouping(.never))
-                                .frame(width: 52)
-                            Text("min each").font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
-                }
-                Button("Add a goal") { goals.append(FocusGoal()) }
-            }
-
-            Section {
-                HStack {
-                    Text("For browser tracking, allow Doggo to control your browser when macOS asks. You can change this in System Settings › Privacy & Security › Automation.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                HStack {
-                    Spacer()
-                    if saved { Text("Saved").foregroundStyle(.secondary) }
-                    Button("Save settings") { save() }.keyboardShortcut(.defaultAction)
-                }
-            }
+            Text("Get a key at console.anthropic.com. Doggo sends the content needed for transcript organization, library questions, or goal suggestions when you request that action.")
+                .font(.caption).foregroundStyle(.secondary)
         }
-        .formStyle(.grouped)
-        .frame(width: 520, height: 620)
+    }
+
+    private var wardenSettings: some View {
+        card("Warden reminders") {
+            reminderThreshold("Sigh after", minutes: $sigh, range: 1...120)
+            reminderThreshold("Fetch after", minutes: $fetch, range: 1...180)
+            reminderThreshold("Bark (closes the tab) after", minutes: $bark, range: 1...240)
+            LabeledContent("Running pace") {
+                Stepper("\(Int(pace)) min per mile", value: $pace, in: 5...20, step: 1)
+                    .accessibilityLabel("Running pace in minutes per mile")
+            }
+            Text("Times count continuous minutes on distracting sites. Leaving for less than a minute keeps the streak. Two minutes without keyboard or mouse input resets it.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private func reminderThreshold(_ title: String, minutes: Binding<Int>, range: ClosedRange<Int>) -> some View {
+        LabeledContent(title) {
+            Stepper("\(minutes.wrappedValue) min", value: minutes, in: range)
+                .accessibilityLabel("\(title) \(minutes.wrappedValue) minutes")
+        }
+    }
+
+    private var siteSettings: some View {
+        card("Distracting sites") {
+            Text("Enter one site per line. Matches include subdomains.")
+                .font(.caption).foregroundStyle(.secondary)
+            TextEditor(text: $domains)
+                .accessibilityLabel("Distracting sites")
+                .font(.system(.body, design: .monospaced))
+                .scrollContentBackground(.hidden)
+                .padding(5)
+                .frame(height: 140)
+                .background(LibraryColors.shelf, in: RoundedRectangle(cornerRadius: 7))
+                .overlay { RoundedRectangle(cornerRadius: 7).strokeBorder(LibraryColors.line).allowsHitTesting(false) }
+            Text("Walk me redirects distracting tabs for 25 minutes in supported browsers. Manage browser access in System Settings › Privacy & Security › Automation.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private var focusGoalSettings: some View {
+        card("Focus goals") {
+            ForEach($goals) { $goal in
+                let id = goal.id
+                VStack(alignment: .leading, spacing: 7) {
+                    HStack {
+                        TextField("Goal, e.g. French practice", text: $goal.name)
+                        Button {
+                            goals.removeAll { $0.id == id }
+                        } label: {
+                            Image(systemName: "minus.circle")
+                        }
+                        .buttonStyle(.borderless)
+                        .accessibilityLabel("Remove goal")
+                    }
+                    HStack {
+                        TextField("Units, e.g. Duolingo lessons", text: $goal.units)
+                        TextField("Minutes", value: $goal.minutesPerUnit, format: .number.grouping(.never))
+                            .frame(width: 52)
+                        Text("min each").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            Button("Add a goal") { goals.append(FocusGoal()) }
+        }
+    }
+
+    private var saveBar: some View {
+        VStack(spacing: 0) {
+            Rectangle().fill(LibraryColors.line).frame(height: 1)
+            HStack(spacing: 12) {
+                Spacer()
+                if saved {
+                    Label("Saved", systemImage: "checkmark")
+                        .font(.caption).foregroundStyle(LibraryColors.accent)
+                }
+                Button("Save settings") { save() }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Theme.trail)
+                    .keyboardShortcut(.defaultAction)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 11)
+        }
+        .background(LibraryColors.shelf)
+    }
+
+    private func card<Content: View>(_ title: String, highlighted: Bool = false,
+                                    @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if highlighted {
+                DoggoWindowHeader { Text(title) }
+            } else {
+                Text(title).font(.system(size: 14, weight: .semibold))
+                    .padding(.horizontal, 14)
+                    .padding(.top, 12)
+            }
+            VStack(alignment: .leading, spacing: 10, content: content)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(14)
+        }
+        .doggoWindowCard()
     }
 
     private func reminderWindow(_ title: String, window: Binding<GoalReminderSchedule.Window>) -> some View {
@@ -144,5 +218,15 @@ struct SettingsView: View {
         }.filter { !$0.name.isEmpty && !$0.units.isEmpty }
         saved = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { saved = false }
+    }
+}
+
+private struct SettingsRowStyle: LabeledContentStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 12) {
+            configuration.label
+            Spacer(minLength: 0)
+            configuration.content
+        }
     }
 }
