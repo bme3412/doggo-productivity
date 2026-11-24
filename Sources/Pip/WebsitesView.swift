@@ -31,33 +31,35 @@ struct WebsitesView: View {
     var body: some View {
         let days = days
         let sites = matchingSites(days)
-        VStack(spacing: 0) {
+        VStack(spacing: 12) {
             controls
-            Divider()
             if sites.isEmpty {
                 ContentUnavailableView(search.isEmpty ? "No websites in this range" : "No matching websites",
                                        systemImage: "safari")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .websiteCard()
             } else {
                 HSplitView {
-                    table(sites)
+                    websiteList(sites)
+                        .padding(.trailing, 6)
                         .frame(minWidth: 370, maxHeight: .infinity)
                     if let selected = sites.first(where: { $0.host == host }) ?? sites.first {
                         WebsiteDetail(site: selected, days: days)
+                            .padding(.leading, 6)
                             .frame(minWidth: 305, idealWidth: 340, maxWidth: 445, maxHeight: .infinity)
                     }
                 }
             }
-            Divider()
             HStack(spacing: 12) {
                 Text("A visit starts when Doggo sees you enter or return to a website.")
                 Spacer()
                 VisitCoverageLabel(sites: sites)
             }
             .font(.caption).foregroundStyle(.secondary)
-            .padding(.horizontal, 16).padding(.vertical, 9)
         }
-        .background(Color(nsColor: .windowBackgroundColor))
+        .padding(16)
+        .background(LibraryColors.paper)
+        .tint(LibraryColors.accent)
         .onChange(of: sites.map(\.host), initial: true) { _, available in
             if host == nil || !available.contains(host ?? "") { host = available.first }
         }
@@ -83,7 +85,6 @@ struct WebsitesView: View {
             }
             .fixedSize()
         }
-        .padding(14)
     }
 
     private func matchingSites(_ days: [DayStats]) -> [SiteTime] {
@@ -98,21 +99,40 @@ struct WebsitesView: View {
         }
     }
 
+    private func websiteList(_ sites: [SiteTime]) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("\(sites.count.formatted()) \(sites.count == 1 ? "website" : "websites")")
+                .font(.system(size: 14, weight: .semibold))
+                .padding(.horizontal, 14)
+                .padding(.vertical, 11)
+
+            table(sites)
+        }
+        .websiteCard()
+    }
+
     private func table(_ sites: [SiteTime]) -> some View {
-        Table(sites, selection: $host) {
+        let mostTime = sites.map(\.seconds).max() ?? 1
+        return Table(sites, selection: $host) {
             TableColumn("Website") { site in
-                Text(site.host).lineLimit(1).help(site.host)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(site.host).fontWeight(.medium).lineLimit(1).help(site.host)
+                    WebsiteTimeBar(seconds: site.seconds, maximum: mostTime, color: LibraryColors.accent)
+                }
+                .padding(.vertical, 4)
             }
             TableColumn("Visits") { site in
                 VisitCountText(site: site).frame(maxWidth: .infinity, alignment: .trailing)
             }
             .width(min: 51, ideal: 65, max: 95)
             TableColumn("Time") { site in
-                Text(Format.websiteDuration(site.seconds)).monospacedDigit()
+                Text(Format.websiteDuration(site.seconds)).fontWeight(.medium).monospacedDigit()
                     .frame(maxWidth: .infinity, alignment: .trailing)
             }
             .width(min: 65, ideal: 83, max: 110)
         }
+        .tableStyle(.inset(alternatesRowBackgrounds: false))
+        .scrollContentBackground(.hidden)
     }
 }
 
@@ -145,21 +165,48 @@ private struct WebsiteDetail: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 13) {
-                Text(site.host).font(.system(size: 21, weight: .semibold))
+        VStack(alignment: .leading, spacing: 12) {
+            summary
+            dailyBreakdown
+        }
+    }
+
+    private var summary: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                Text(site.host).font(.system(size: 20, weight: .semibold))
                     .textSelection(.enabled).help(site.host)
                     .lineLimit(2)
-                HStack(alignment: .top, spacing: 18) {
-                    metric("Visits") { VisitCountText(site: site) }
-                    metric("Time") { Text(Format.websiteDuration(site.seconds)) }
-                    metric("Active days") { Text(site.activeDays.formatted()) }
-                }
+                Spacer(minLength: 0)
+                Image(systemName: "pawprint.fill")
+                    .font(.system(size: 18, weight: .medium))
+                    .foregroundStyle(Theme.reportHighlight)
+                    .frame(width: 40, height: 40)
+                    .background(.white.opacity(0.12), in: Circle())
+                    .accessibilityHidden(true)
             }
-            .padding(17)
-            Divider()
+            .padding(.horizontal, 15)
+            .padding(.vertical, 12)
+            .foregroundStyle(Color.white)
+            .background(Theme.reportGradient)
+
+            HStack(spacing: 0) {
+                metric("Visits") { VisitCountText(site: site) }
+                Divider().frame(height: 23)
+                metric("Time") { Text(Format.websiteDuration(site.seconds)) }
+                Divider().frame(height: 23)
+                metric("Active days") { Text(site.activeDays.formatted()) }
+            }
+            .padding(.vertical, 9)
+            .background(LibraryColors.shelf)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 13))
+    }
+
+    private var dailyBreakdown: some View {
+        VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 6) {
-                Text("Daily breakdown").font(.headline)
+                Text("Daily breakdown").font(.system(size: 14, weight: .semibold))
                 line(day: Text("Day"), visits: Text("Visits"), time: Text("Time"))
                     .font(.caption.weight(.medium)).foregroundStyle(.secondary)
             }
@@ -169,18 +216,27 @@ private struct WebsiteDetail: View {
                 line(day: Text(dateLabel(row.date)), visits: VisitCountText(site: row.site),
                      time: Text(Format.websiteDuration(row.site.seconds)).monospacedDigit())
                 .font(.callout)
-                .padding(.vertical, 3)
-                .listRowInsets(EdgeInsets(top: 0, leading: 17, bottom: 0, trailing: 17))
+                .padding(.vertical, 4)
+                .listRowInsets(EdgeInsets(top: 0, leading: 9, bottom: 0, trailing: 9))
             }
             .listStyle(.plain)
+            .scrollContentBackground(.hidden)
         }
+        .websiteCard()
     }
 
     private func metric<V: View>(_ title: String, @ViewBuilder value: () -> V) -> some View {
         VStack(alignment: .leading, spacing: 3) {
-            value().font(.system(size: 20, weight: .semibold)).monospacedDigit()
-            Text(title).font(.caption).foregroundStyle(.secondary)
+            value()
+                .font(.system(size: 19, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+            Text(title).font(.system(size: 11)).foregroundStyle(.secondary)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 12)
+        .accessibilityElement(children: .combine)
     }
 
     private func line<V: View, T: View>(day: Text, visits: V, time: T) -> some View {
@@ -194,6 +250,33 @@ private struct WebsiteDetail: View {
 
     private func dateLabel(_ key: String) -> String {
         Self.dateParser.date(from: key)?.formatted(.dateTime.month(.abbreviated).day().year()) ?? key
+    }
+}
+
+private extension View {
+    func websiteCard() -> some View {
+        let shape = RoundedRectangle(cornerRadius: 12)
+        return background(Color(nsColor: .textBackgroundColor), in: shape)
+            .clipShape(shape)
+            .overlay { shape.strokeBorder(LibraryColors.line.opacity(0.8)).allowsHitTesting(false) }
+    }
+}
+
+private struct WebsiteTimeBar: View {
+    let seconds: TimeInterval
+    let maximum: TimeInterval
+    var color = Theme.trail
+
+    var body: some View {
+        GeometryReader { geometry in
+            Capsule().fill(color.opacity(0.12))
+                .overlay(alignment: .leading) {
+                    Capsule().fill(color)
+                        .frame(width: geometry.size.width * (seconds / max(1, maximum)))
+                }
+        }
+        .frame(height: 3)
+        .accessibilityHidden(true)
     }
 }
 
@@ -262,7 +345,7 @@ struct TopWebsiteRows: View {
                 .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(Theme.muted)
                 ForEach(top) { site in
-                    row(site, timeScale: max(1, first.seconds))
+                    row(site, timeScale: first.seconds)
                 }
                 VisitCoverageLabel(sites: top)
                     .font(.system(size: 10)).foregroundStyle(Theme.muted)
@@ -286,15 +369,7 @@ struct TopWebsiteRows: View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(site.host).fontWeight(.medium).lineLimit(1).help(site.host)
-                GeometryReader { geometry in
-                    Capsule().fill(Theme.trail.opacity(0.12))
-                        .overlay(alignment: .leading) {
-                            Capsule().fill(Theme.trail)
-                                .frame(width: geometry.size.width * (site.seconds / timeScale))
-                        }
-                }
-                .frame(height: 3)
-                .accessibilityHidden(true)
+                WebsiteTimeBar(seconds: site.seconds, maximum: timeScale)
             }
             VisitCountText(site: site)
                 .foregroundStyle(Theme.muted)

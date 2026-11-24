@@ -327,6 +327,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                   styleMask: [.titled, .closable, .miniaturizable, .resizable],
                                   backing: .buffered, defer: false)
             window.title = "Doggo Websites"
+            window.titlebarAppearsTransparent = true
+            window.backgroundColor = NSColor(LibraryColors.paper)
             window.isReleasedWhenClosed = false
             window.contentMinSize = NSSize(width: 730, height: 390)
             window.contentView = NSHostingView(rootView: WebsitesView(tracker: state.tracker))

@@ -71,21 +71,19 @@ struct FocusSummaryCard: View {
     var comparison: String?
 
     var body: some View {
-        let highlight = Color(hex: 0xD3E6B9)
-
         VStack(spacing: 0) {
             HStack(spacing: 16) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(title)
                         .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(highlight)
+                        .foregroundStyle(Theme.reportHighlight)
                     Text(value)
                         .font(.system(size: 33, weight: .semibold, design: .rounded))
                         .monospacedDigit()
                     if let detail {
                         Text(detail)
                             .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(highlight)
+                            .foregroundStyle(Theme.reportHighlight)
                     }
                 }
                 .accessibilityElement(children: .combine)
@@ -94,7 +92,7 @@ struct FocusSummaryCard: View {
                     if let streakProgress {
                         Circle().strokeBorder(.white.opacity(0.2), lineWidth: 4)
                         Circle().trim(from: 0, to: streakProgress)
-                            .stroke(highlight, style: StrokeStyle(lineWidth: 4, lineCap: .round))
+                            .stroke(Theme.reportHighlight, style: StrokeStyle(lineWidth: 4, lineCap: .round))
                             .rotationEffect(.degrees(-90))
                             .padding(2)
                     } else {
@@ -102,7 +100,7 @@ struct FocusSummaryCard: View {
                     }
                     Image(systemName: "pawprint.fill")
                         .font(.system(size: 22, weight: .medium))
-                        .foregroundStyle(highlight)
+                        .foregroundStyle(Theme.reportHighlight)
                 }
                 .frame(width: 54, height: 54)
                 .accessibilityHidden(true)
@@ -111,8 +109,7 @@ struct FocusSummaryCard: View {
             .padding(.horizontal, 15)
             .padding(.vertical, 9)
             .foregroundStyle(Color.white)
-            .background(LinearGradient(colors: [Color(hex: 0x305A49), Color(hex: 0x1C3C32)],
-                                       startPoint: .topLeading, endPoint: .bottomTrailing))
+            .background(Theme.reportGradient)
 
             VStack(alignment: .leading, spacing: 7) {
                 HStack(spacing: 0) {

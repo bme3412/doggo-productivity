@@ -14,6 +14,9 @@ enum Theme {
     static let amberText = Color(hex: 0x8A5F35)
     static let violet = Color(hex: 0x777AA6)
     static let trail = Color(hex: 0x3C776B)
+    static let reportHighlight = Color(hex: 0xD3E6B9)
+    static let reportGradient = LinearGradient(colors: [Color(hex: 0x305A49), Color(hex: 0x1C3C32)],
+                                               startPoint: .topLeading, endPoint: .bottomTrailing)
 }
 
 struct PillButton: View {
