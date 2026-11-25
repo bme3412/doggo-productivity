@@ -9,6 +9,11 @@ struct SettingsView: View {
     @State private var sigh = Prefs.sighMinutes
     @State private var fetch = Prefs.fetchMinutes
     @State private var bark = Prefs.barkMinutes
+    @State private var redirectsEnabled = Prefs.distractionRedirectsEnabled
+    @State private var visitInterval = Prefs.distractionVisitInterval
+    @State private var minuteInterval = Prefs.distractionMinuteInterval
+    @State private var cooldownMinutes = Prefs.distractionCooldownMinutes
+    @State private var smartRedirects = Prefs.smartRedirectSuggestions
     @State private var pace = Prefs.minutesPerMile
     @State private var domains = Prefs.distractingDomains.joined(separator: "\n")
     @State private var goals = Prefs.focusGoals
@@ -19,6 +24,7 @@ struct SettingsView: View {
         VStack(spacing: 0) {
             ScrollView {
                 VStack(spacing: 12) {
+                    goalRedirectSettings
                     goalReminderSettings
                     calendarSettings
                     claudeSettings
@@ -38,8 +44,40 @@ struct SettingsView: View {
         .frame(width: 520, height: 620)
     }
 
+    private var goalRedirectSettings: some View {
+        card("Goal redirects on distracting sites", highlighted: true) {
+            LabeledContent("Suggest time-aware goal actions") {
+                Toggle("Suggest time-aware goal actions", isOn: $redirectsEnabled)
+                    .toggleStyle(.switch).labelsHidden()
+            }
+            if redirectsEnabled {
+                Divider()
+                LabeledContent("Every N distracting visits") {
+                    Stepper("\(visitInterval) \(visitInterval == 1 ? "visit" : "visits")",
+                            value: $visitInterval, in: 1...25)
+                        .accessibilityLabel("Every \(visitInterval) distracting visits")
+                }
+                LabeledContent("Or every N wasted minutes") {
+                    Stepper("\(minuteInterval) min", value: $minuteInterval, in: 5...120, step: 5)
+                        .accessibilityLabel("Every \(minuteInterval) wasted minutes")
+                }
+                LabeledContent("Cooldown between bubbles") {
+                    Stepper("\(cooldownMinutes) min", value: $cooldownMinutes, in: 1...60)
+                        .accessibilityLabel("Cooldown \(cooldownMinutes) minutes")
+                }
+                Divider()
+                LabeledContent("Tailor suggestions with Claude") {
+                    Toggle("Tailor suggestions with Claude", isOn: $smartRedirects)
+                        .toggleStyle(.switch).labelsHidden()
+                }
+            }
+            Text("Triggers on whichever daily threshold hits first — visits or total wasted minutes — alongside Warden’s continuous streak reminders. Uses your saved goal links and study library first, with optional Claude tailoring when an API key is set.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
     private var goalReminderSettings: some View {
-        card("Goal reminders", highlighted: true) {
+        card("Goal reminders") {
             LabeledContent("Suggest a step once a day") {
                 Toggle("Suggest a step once a day", isOn: $goalReminders.automatic)
                     .toggleStyle(.switch).labelsHidden()
@@ -254,12 +292,18 @@ struct SettingsView: View {
         Prefs.sighMinutes = sigh
         Prefs.fetchMinutes = max(fetch, sigh)
         Prefs.barkMinutes = max(bark, fetch)
+        Prefs.distractionRedirectsEnabled = redirectsEnabled
+        Prefs.distractionVisitInterval = visitInterval
+        Prefs.distractionMinuteInterval = minuteInterval
+        Prefs.distractionCooldownMinutes = cooldownMinutes
+        Prefs.smartRedirectSuggestions = smartRedirects
         Prefs.minutesPerMile = pace
         Prefs.goalReminders = goalReminders
         Prefs.distractingDomains = domains
             .split(whereSeparator: \.isNewline)
             .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
             .filter { !$0.isEmpty }
+        state.tracker.syncRedirectMilestones()
         Prefs.focusGoals = goals.map { row in
             FocusGoal(id: row.id, name: row.name.trimmingCharacters(in: .whitespacesAndNewlines),
                       units: row.units.trimmingCharacters(in: .whitespacesAndNewlines),

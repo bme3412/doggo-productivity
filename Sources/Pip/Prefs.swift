@@ -35,6 +35,11 @@ enum Prefs {
             "sighMinutes": 15,
             "fetchMinutes": 20,
             "barkMinutes": 30,
+            "distractionRedirectsEnabled": true,
+            "distractionVisitInterval": 3,
+            "distractionMinuteInterval": 15,
+            "distractionCooldownMinutes": 5,
+            "smartRedirectSuggestions": true,
             "minutesPerMile": 10.0,
             "claudeModel": "claude-sonnet-5-5",
             "distracting": [
@@ -67,6 +72,26 @@ enum Prefs {
     static var barkMinutes: Int {
         get { max(1, d.integer(forKey: "barkMinutes")) }
         set { d.set(newValue, forKey: "barkMinutes") }
+    }
+    static var distractionRedirectsEnabled: Bool {
+        get { d.bool(forKey: "distractionRedirectsEnabled") }
+        set { d.set(newValue, forKey: "distractionRedirectsEnabled") }
+    }
+    static var distractionVisitInterval: Int {
+        get { max(1, d.integer(forKey: "distractionVisitInterval")) }
+        set { d.set(max(1, newValue), forKey: "distractionVisitInterval") }
+    }
+    static var distractionMinuteInterval: Int {
+        get { max(1, d.integer(forKey: "distractionMinuteInterval")) }
+        set { d.set(max(1, newValue), forKey: "distractionMinuteInterval") }
+    }
+    static var distractionCooldownMinutes: Int {
+        get { max(1, d.integer(forKey: "distractionCooldownMinutes")) }
+        set { d.set(max(1, newValue), forKey: "distractionCooldownMinutes") }
+    }
+    static var smartRedirectSuggestions: Bool {
+        get { d.bool(forKey: "smartRedirectSuggestions") }
+        set { d.set(newValue, forKey: "smartRedirectSuggestions") }
     }
     static var minutesPerMile: Double {
         get { max(4, d.double(forKey: "minutesPerMile")) }

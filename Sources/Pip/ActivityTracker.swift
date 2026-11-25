@@ -23,6 +23,18 @@ struct DayStats: Codable {
         if startsVisit { counted[host, default: SiteVisits()].count += 1 }
         siteVisits = counted
     }
+
+    func distractingVisits(matching isDistracting: (String) -> Bool) -> Int {
+        (siteVisits ?? [:]).reduce(0) { total, entry in
+            isDistracting(entry.key) ? total + entry.value.count : total
+        }
+    }
+
+    func distractingSeconds(matching isDistracting: (String) -> Bool) -> TimeInterval {
+        sites.reduce(0) { total, entry in
+            isDistracting(entry.key) ? total + entry.value : total
+        }
+    }
 }
 
 enum NudgeKind: String { case sigh, fetch, bark }
@@ -52,6 +64,9 @@ final class ActivityTracker: ObservableObject {
 
     /// Called when a distraction streak crosses a threshold.
     var onStreak: ((StreakEvent) -> Void)?
+    /// Called when cumulative daily distracting visits or minutes cross a configured interval.
+    /// Returns true when the prompt is accepted so milestones advance.
+    var onDistractionThreshold: ((DistractionThresholdEvent) -> Bool)?
     var onSample: ((ActivitySample) -> Void)?
     var onWalkFinished: (() -> Void)?
 
@@ -60,6 +75,9 @@ final class ActivityTracker: ObservableObject {
     private let graceSeconds: Double = 60      // short detours don't reset a streak
     private var calmSeconds: Double = 0
     private var fired: Set<NudgeKind> = []
+    private var lastRedirectVisitMilestone = 0
+    private var lastRedirectMinuteMilestone = 0
+    private var lastRedirectAt: Date?
     private var snoozedUntil: Date?
     private var ticks = 0
     private var timer: Timer?
@@ -79,6 +97,18 @@ final class ActivityTracker: ObservableObject {
         } else if Prefs.walkStart != nil {
             Prefs.walkStart = nil
         }
+        syncRedirectMilestones()
+    }
+
+    /// Aligns milestone counters to today's current totals so restarts or setting changes
+    /// wait for the next threshold crossing rather than re-firing past ones.
+    func syncRedirectMilestones() {
+        let visits = today.distractingVisits(matching: Prefs.isDistracting)
+        let minutes = Int(today.distractingSeconds(matching: Prefs.isDistracting) / 60)
+        let visitStep = max(1, Prefs.distractionVisitInterval)
+        let minuteStep = max(1, Prefs.distractionMinuteInterval)
+        lastRedirectVisitMilestone = (visits / visitStep) * visitStep
+        lastRedirectMinuteMilestone = (minutes / minuteStep) * minuteStep
     }
 
     func start() {
@@ -194,6 +224,8 @@ final class ActivityTracker: ObservableObject {
             today = pastDays.removeValue(forKey: dayKey) ?? Self.load(date: dayKey)
             focusStretch = 0
             resetStreak()
+            lastRedirectAt = nil
+            syncRedirectMilestones()
         }
 
         let anyInput = CGEventType(rawValue: ~0)!
@@ -229,7 +261,9 @@ final class ActivityTracker: ObservableObject {
             if walk == nil {
                 streakSeconds += interval
                 streakHost = host
-                checkThresholds(host: host)
+                if !checkThresholds(host: host) {
+                    checkDistractionRedirect(host: host, at: now)
+                }
             }
         } else {
             calmSeconds += interval
@@ -295,10 +329,11 @@ final class ActivityTracker: ObservableObject {
         return nil
     }
 
-    private func checkThresholds(host: String) {
-        if let until = snoozedUntil, Date() < until { return }
+    @discardableResult
+    private func checkThresholds(host: String) -> Bool {
+        if let until = snoozedUntil, Date() < until { return false }
         let level = Prefs.level
-        guard level != .nap, let reached = highestReached() else { return }
+        guard level != .nap, let reached = highestReached() else { return false }
 
         let allowed: NudgeKind?
         switch (level, reached) {
@@ -306,9 +341,44 @@ final class ActivityTracker: ObservableObject {
         case (.fetch, .bark): allowed = .fetch
         default: allowed = reached
         }
-        guard let kind = allowed, !fired.contains(kind) else { return }
+        guard let kind = allowed, !fired.contains(kind) else { return false }
         fired.insert(kind)
         onStreak?(StreakEvent(kind: kind, host: host, minutes: Int(streakSeconds / 60)))
+        return true
+    }
+
+    private func checkDistractionRedirect(host: String, at now: Date) {
+        guard Prefs.distractionRedirectsEnabled else { return }
+        if let until = snoozedUntil, now < until { return }
+        let cooldown = TimeInterval(Prefs.distractionCooldownMinutes * 60)
+        if let last = lastRedirectAt, now.timeIntervalSince(last) < cooldown { return }
+
+        let totalVisits = today.distractingVisits(matching: Prefs.isDistracting)
+        let totalSeconds = today.distractingSeconds(matching: Prefs.isDistracting)
+        let totalMinutes = Int(totalSeconds / 60)
+
+        let visitStep = max(1, Prefs.distractionVisitInterval)
+        let minuteStep = max(1, Prefs.distractionMinuteInterval)
+        let visitMilestone = (totalVisits / visitStep) * visitStep
+        let minuteMilestone = (totalMinutes / minuteStep) * minuteStep
+
+        let crossedVisits = visitMilestone > lastRedirectVisitMilestone && visitMilestone > 0
+        let crossedMinutes = minuteMilestone > lastRedirectMinuteMilestone && minuteMilestone > 0
+        guard crossedVisits || crossedMinutes else { return }
+
+        let trigger: DistractionThresholdEvent.Trigger = crossedVisits ? .visits : .minutes
+        let event = DistractionThresholdEvent(
+            trigger: trigger,
+            host: host,
+            totalVisits: totalVisits,
+            totalSeconds: totalSeconds,
+            date: now
+        )
+        if onDistractionThreshold?(event) == true {
+            lastRedirectVisitMilestone = max(lastRedirectVisitMilestone, visitMilestone)
+            lastRedirectMinuteMilestone = max(lastRedirectMinuteMilestone, minuteMilestone)
+            lastRedirectAt = now
+        }
     }
 
     // MARK: - Focus history

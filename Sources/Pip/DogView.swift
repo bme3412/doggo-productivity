@@ -130,6 +130,8 @@ struct DogView: View {
     var artwork: DogArtwork = .classic
     var scale: CGFloat = 1
     var motion = DogMotion()
+    var pairPose: PairDogPose? = nil
+    var syncedNow: Date? = nil
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var moodStarts: [Mood: Date] = [:]
 
@@ -172,22 +174,36 @@ struct DogView: View {
     }
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: reduceMotion)) { timeline in
-            let now = timeline.date
-            let frame = motion.frame(for: mood, changedAt: moodChangedAt, now: now, reduceMotion: reduceMotion)
-            let tilt = petting.map { Double(min(1, max(-1, ($0.point.x - 126) / 24))) * 14 } ?? 0
-            let scratching = !reduceMotion && (petting?.scratchStarted.map { now.timeIntervalSince($0) >= 1.3 } ?? false)
-            let transition = reduceMotion ? nil : Animation.easeInOut(duration: 0.34)
-            DogCanvas(frame: frame, now: now, moodStarts: moodStarts, bandana: bandana, hasTag: hasTag,
-                      artwork: artwork, moods: MoodWeights(values: [frame.mood: 1]),
-                      petTilt: tilt, scratchStrength: scratching ? 1 : 0)
-                .animation(transition, value: frame.mood)
-                .animation(transition, value: scratching)
-                .onChange(of: frame.mood, initial: true) { _, mood in
-                    moodStarts[mood] = now.addingTimeInterval(-frame.elapsed)
+        Group {
+            if let pairPose, let syncedNow, petting == nil, !reduceMotion {
+                let clock = syncedNow.timeIntervalSinceReferenceDate
+                let time = motion.alternatePace ? clock * 1.11 + 0.83 : clock
+                let frame = DogMotion.Frame(time: time, mood: pairPose.mood,
+                                            elapsed: pairPose.elapsed, facingRight: pairPose.facingRight)
+                renderCanvas(frame: frame, now: syncedNow)
+            } else {
+                TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: reduceMotion)) { timeline in
+                    let now = timeline.date
+                    let frame = motion.frame(for: mood, changedAt: moodChangedAt, now: now, reduceMotion: reduceMotion)
+                    renderCanvas(frame: frame, now: now)
                 }
+            }
         }
         .frame(width: DogView.canvasSize.width * scale, height: DogView.canvasSize.height * scale)
+    }
+
+    private func renderCanvas(frame: DogMotion.Frame, now: Date) -> some View {
+        let tilt = petting.map { Double(min(1, max(-1, ($0.point.x - 126) / 24))) * 14 } ?? 0
+        let scratching = !reduceMotion && (petting?.scratchStarted.map { now.timeIntervalSince($0) >= 1.3 } ?? false)
+        let transition = reduceMotion ? nil : Animation.easeInOut(duration: frame.mood == .zoomies ? 0.16 : 0.30)
+        return DogCanvas(frame: frame, now: now, moodStarts: moodStarts, bandana: bandana, hasTag: hasTag,
+                         artwork: artwork, moods: MoodWeights(values: [frame.mood: 1]),
+                         petTilt: tilt, scratchStrength: scratching ? 1 : 0)
+            .animation(transition, value: frame.mood)
+            .animation(transition, value: scratching)
+            .onChange(of: frame.mood, initial: true) { _, mood in
+                moodStarts[mood] = now.addingTimeInterval(-frame.elapsed)
+            }
     }
 }
 
@@ -314,11 +330,27 @@ private struct DogPose {
         paws: CGRect(x: 64, y: 65, width: 62, height: 26),
         neck: CGRect(x: 57, y: 49, width: 21, height: 18)
     )
+    private static let playBowing = DogPose(
+        head: CGRect(x: 30, y: 44, width: 35, height: 35),
+        torso: CGRect(x: 52, y: 38, width: 74, height: 38),
+        haunch: CGRect(x: 96, y: 42, width: 28, height: 24),
+        paws: CGRect(x: 16, y: 62, width: 106, height: 30),
+        neck: CGRect(x: 50, y: 54, width: 22, height: 16)
+    )
+    private static let dancing = DogPose(
+        head: CGRect(x: 51, y: 7, width: 34, height: 34),
+        torso: CGRect(x: 63, y: 33, width: 38, height: 50),
+        haunch: CGRect(x: 66, y: 65, width: 34, height: 24),
+        paws: CGRect(x: 36, y: 44, width: 64, height: 50),
+        neck: CGRect(x: 58, y: 36, width: 28, height: 16)
+    )
 
     init(mood: Mood) {
         switch mood {
-        case .nap, .sigh, .drowsy, .mopey, .stretch: self = .lying
-        case .walking: self = .trotting
+        case .nap, .sigh, .drowsy, .mopey, .stretch, .cuddle: self = .lying
+        case .walking, .zoomies: self = .trotting
+        case .playBow: self = .playBowing
+        case .dance: self = .dancing
         default: self = .sitting
         }
     }
@@ -581,17 +613,29 @@ private struct DogPainter {
     // MARK: Paint
 
     private var napping: Bool { mood == .nap || mood == .drowsy }
-    private var playful: Bool { [.excited, .happy, .petting, .wag, .highFive, .celebrate].contains(mood) }
+    private var playful: Bool { [.excited, .happy, .petting, .wag, .highFive, .celebrate, .playBow, .dance, .zoomies].contains(mood) }
     private var stretch: Double {
         mood == .stretch ? kf(min(1, max(0, since / 3)), [(0, 0), (0.35, 1), (0.7, 0.9), (1, 0)]) : 0
     }
 
     var movement: DogMovement {
         switch mood {
-        case .nap, .sigh, .drowsy, .mopey, .stretch:
-            let thump = napping ? kf(phase(5), [(0, 0), (0.7, 0), (0.76, -24), (0.82, 0), (0.88, -16), (1, 0)]) : 0
+        case .nap, .sigh, .drowsy, .mopey, .stretch, .cuddle:
+            let thump: Double
+            if mood == .cuddle {
+                thump = -14 * wave(2.4)
+            } else if napping {
+                thump = kf(phase(5), [(0, 0), (0.7, 0), (0.76, -24), (0.82, 0), (0.88, -16), (1, 0)])
+            } else {
+                thump = 0
+            }
             let tail = DogMovement.Tail(base: CGPoint(x: 126, y: 74), tip: CGPoint(x: 142, y: 86),
                                         control: CGPoint(x: 142, y: 72), angle: thump)
+            if mood == .cuddle {
+                return DogMovement(tail: tail, lean: 0.35,
+                                   headAngle: -7 + 5 * wave(3.2),
+                                   headLift: 2 * wave(3.2))
+            }
             if mood == .stretch { return DogMovement(tail: tail, headAngle: -12 * stretch, headLift: -7 * stretch) }
             if mood == .mopey { return DogMovement(tail: tail, headAngle: 7, headLift: 5) }
             if napping { return DogMovement(tail: tail) }
@@ -602,6 +646,21 @@ private struct DogPainter {
             let tail = DogMovement.Tail(base: CGPoint(x: 119, y: 59), tip: CGPoint(x: 140, y: 42),
                                         control: CGPoint(x: 139, y: 63), angle: -15 + 31 * wave(0.43))
             return DogMovement(tail: tail, bounce: 4 * wave(0.28))
+        case .zoomies:
+            let tail = DogMovement.Tail(base: CGPoint(x: 122, y: 55), tip: CGPoint(x: 148, y: 40),
+                                        control: CGPoint(x: 139, y: 56), angle: -12 + 30 * wave(0.18))
+            return DogMovement(tail: tail, lean: 0.25, bounce: 5.5 * wave(0.21),
+                               headAngle: -8 + 6 * wave(0.24), headLift: -2)
+        case .playBow:
+            let tail = DogMovement.Tail(base: CGPoint(x: 118, y: 46), tip: CGPoint(x: 136, y: 20),
+                                        control: CGPoint(x: 134, y: 42), angle: -24 + 54 * wave(0.22))
+            return DogMovement(tail: tail, bounce: 3.5 * wave(0.32),
+                               headAngle: -10 + 12 * wave(0.64), headLift: -3 * wave(0.32))
+        case .dance:
+            let tail = DogMovement.Tail(base: CGPoint(x: 98, y: 74), tip: CGPoint(x: 124, y: 56),
+                                        control: CGPoint(x: 115, y: 76), angle: -16 + 40 * wave(0.24))
+            return DogMovement(tail: tail, lean: 0.22, bounce: 5.0 * wave(0.46),
+                               headAngle: -9 + 18 * wave(0.92), headLift: -2 * wave(0.46))
         default:
             let fetch = mood == .fetch
             let bark = mood == .bark
@@ -642,8 +701,11 @@ private struct DogPainter {
                     drawTail($0, from: tail.base, to: tail.tip, control: tail.control)
                 }
                 switch mood {
-                case .nap, .sigh, .drowsy, .mopey, .stretch: drawLying(body, movement: movement)
+                case .nap, .sigh, .drowsy, .mopey, .stretch, .cuddle: drawLying(body, movement: movement)
                 case .walking: drawTrotting(body, movement: movement)
+                case .zoomies: drawZoomies(body, movement: movement)
+                case .playBow: drawPlayBow(body, movement: movement)
+                case .dance: drawDancing(body, movement: movement)
                 default: drawSitting(body, movement: movement)
                 }
             }
@@ -661,7 +723,7 @@ private struct DogPainter {
         let lift = min(1, max(0, movement.bounce / 12))
         let scale = 1 - 0.18 * lift
         let alpha = 1 - 0.35 * lift
-        let cy = mood == .walking ? 91.5 : 94.0
+        let cy = (mood == .walking || mood == .zoomies) ? 91.5 : 94.0
         fill(c, ellipse(cx, cy, baseRx * scale, 5.2 * scale), Color.black.opacity(0.11 * alpha))
         fill(c, ellipse(cx, cy - 0.5, baseRx * 0.72 * scale, 3.0 * scale), Color.black.opacity(0.16 * alpha))
     }
@@ -687,7 +749,7 @@ private struct DogPainter {
         if mood == .stretch {
             sx = 1 + 0.12 * stretch
             sy = 1 - 0.15 * stretch
-        } else if napping || mood == .mopey {
+        } else if napping || mood == .mopey || mood == .cuddle {
             sy = 1 + 0.05 * wave(3.6)
         } else {
             let p = phase(2.8)
@@ -752,7 +814,11 @@ private struct DogPainter {
                 stroke(e, ear, rimColor, 0.9)
             }
 
-            if napping || stretch > 0.2 {
+            if mood == .cuddle {
+                // Happy upturned snuggle eyes & extra warm blush
+                stroke(h, path { $0.move(to: CGPoint(x: 33, y: 64)); $0.addQuadCurve(to: CGPoint(x: 41.5, y: 64), control: CGPoint(x: 37.2, y: 59.5)) }, ink, 2)
+                fill(h, ellipse(43, 73, 5.2, 3.0), blush.opacity(0.85))
+            } else if napping || stretch > 0.2 {
                 stroke(h, path { $0.move(to: CGPoint(x: 33, y: 64)); $0.addQuadCurve(to: CGPoint(x: 41, y: 64), control: CGPoint(x: 37, y: 67)) }, ink, 2)
             } else {
                 let blink = kf(phase(3.8), [(0, 1), (0.92, 1), (0.95, 0.1), (1, 1)])
@@ -763,7 +829,9 @@ private struct DogPainter {
                 // Sad, upturned brow
                 stroke(h, path { $0.move(to: CGPoint(x: 32, y: 55.5)); $0.addLine(to: CGPoint(x: 41.5, y: 57.5)) }, browColor, 2)
             }
-            fill(h, ellipse(44, 74, 4, 2.5), blush)
+            if mood != .cuddle {
+                fill(h, ellipse(44, 74, 4, 2.5), blush)
+            }
         }
     }
 
@@ -948,6 +1016,282 @@ private struct DogPainter {
                     stroke(ear, shape, rimColor, 0.9)
                 } else {
                     drawEar(ear, x: 61, y: 32, length: 21)
+                }
+            }
+        }
+    }
+
+    // MARK: Play Bow
+
+    func drawPlayBow(_ b: GraphicsContext, movement: DogMovement) {
+        let paws = placed(b, \.paws)
+        // Standing hind legs supporting the raised rump
+        fill(paws, rrect(103, 62, 9, 28, 4.5), shadowCoat)
+        fill(paws, ellipse(106, 90, 7, 3.3), shadowCoat)
+        fill(paws, rrect(112, 60, 9.5, 30, 4.5), lightCoat)
+        fill(paws, ellipse(115, 90, 7.5, 3.5), snout)
+
+        // Raised haunch & angled playful torso (chest low, rump high!)
+        fill(placed(b, \.haunch), ellipse(108, 53, 17, 13), shadowCoat)
+        let torso = placed(b, \.torso)
+        with(torso, pivot: CGPoint(x: 84, y: 60), rotate: -23) { sloped in
+            let body = ellipse(84, 60, 36, 17)
+            fill(sloped, body, coat)
+            drawMarkings(sloped, on: body, patchShape: ellipse(98, 53, 15, 8))
+            drawCoatHighlights(sloped, on: body, highlight: ellipse(80, 47, 25, 5.5))
+            if look?.chestPatch == true { fill(sloped, ellipse(59, 65, 7, 8), Color(hex: 0xDBD0C1)) }
+            if let harness = look?.harness {
+                stroke(sloped, path {
+                    $0.move(to: CGPoint(x: 59, y: 64))
+                    $0.addQuadCurve(to: CGPoint(x: 92, y: 55), control: CGPoint(x: 75, y: 69))
+                }, Color(hex: harness), 4)
+            }
+        }
+
+        // Front paws stretched flat out ahead on the ground, tapping eagerly
+        let tap = -3.5 * wave(0.32)
+        fill(paws, rrect(24, 83 + tap * 0.5, 38, 8.5, 4.2), shadowCoat)
+        fill(paws, rrect(16, 80 + tap, 42, 9.5, 4.8), lightCoat)
+        fill(paws, ellipse(20, 86 + tap, 7, 3.5), snout)
+
+        drawNeckwear(placed(b, \.neck), left: CGPoint(x: 50, y: 58), right: CGPoint(x: 70, y: 56),
+                     tip: CGPoint(x: 59, y: 71))
+
+        with(placed(b, \.head), pivot: CGPoint(x: 54, y: 68), rotate: movement.headAngle,
+             dy: movement.headLift) { h in
+            let headShape = ellipse(46, 61, 17, 16.5)
+            fill(h, headShape, coat)
+            drawCoatHighlights(h, on: headShape, highlight: ellipse(43, 48, 10, 5))
+            with(h, pivot: CGPoint(x: 38, y: 67), scaleX: muzzleScale) { jaw in
+                fill(jaw, ellipse(30, 67, 12.5, 8), snout)
+                drawNose(jaw, cx: 19, cy: 64)
+                let pant = 1 + 0.45 * wave(0.35)
+                with(jaw, pivot: CGPoint(x: 29, y: 73), scaleY: pant) { tg in
+                    fill(tg, path {
+                        $0.move(to: CGPoint(x: 25.5, y: 73))
+                        $0.addQuadCurve(to: CGPoint(x: 32.5, y: 73), control: CGPoint(x: 29, y: 81.5))
+                        $0.closeSubpath()
+                    }, tongue)
+                }
+                stroke(jaw, path { $0.move(to: CGPoint(x: 22, y: 71.5)); $0.addQuadCurve(to: CGPoint(x: 33, y: 71.5), control: CGPoint(x: 27.5, y: 74.5)) }, ink, 1.5)
+            }
+            // Bright excited eyes looking up
+            fill(h, ellipse(39, 57, 3.3, 3.3), ink)
+            fill(h, ellipse(40.2, 55.6, 1.2, 1.2), .white)
+            fill(h, ellipse(45, 67, 4.2, 2.5), blush)
+
+            with(h, pivot: CGPoint(x: 53, y: 47), rotate: -18 + 12 * wave(0.32)) { e in
+                if look != nil { drawEar(e, x: 52, y: 47, length: 24); return }
+                let ear = path {
+                    $0.move(to: CGPoint(x: 51, y: 46))
+                    $0.addQuadCurve(to: CGPoint(x: 64, y: 66), control: CGPoint(x: 66, y: 44))
+                    $0.addQuadCurve(to: CGPoint(x: 53, y: 61), control: CGPoint(x: 57, y: 69))
+                    $0.addQuadCurve(to: CGPoint(x: 51, y: 46), control: CGPoint(x: 49, y: 53))
+                    $0.closeSubpath()
+                }
+                fill(e, ear, ears)
+                stroke(e, ear, rimColor, 0.9)
+            }
+        }
+    }
+
+    // MARK: Dancing on 2 Hind Legs
+
+    func drawDancing(_ b: GraphicsContext, movement: DogMovement) {
+        let stepA = wave(0.46)
+        let stepB = wave(0.46, offset: 0.23)
+        let paws = placed(b, \.paws)
+
+        // Back-side front paw reaching out to partner's shoulder/paw
+        let farArmLift = -6 * stepB
+        stroke(paws, path {
+            $0.move(to: CGPoint(x: 69, y: 48))
+            $0.addQuadCurve(to: CGPoint(x: 40, y: 46 + farArmLift),
+                            control: CGPoint(x: 54, y: 44 + farArmLift * 0.5))
+        }, shadowCoat, 9.5)
+        fill(paws, ellipse(39, 46 + farArmLift, 6.8, 5.2), shadowCoat)
+
+        // Two hind legs doing alternating two-step dance kicks on the floor!
+        with(paws, pivot: CGPoint(x: 78, y: 74), rotate: -10 + 22 * stepA, dy: -5 * stepA) { leg in
+            fill(leg, rrect(73.5, 72, 9, 20, 4.5), shadowCoat)
+            fill(leg, ellipse(75.5, 92, 7.5, 3.5), shadowCoat)
+        }
+        with(paws, pivot: CGPoint(x: 91, y: 74), rotate: -10 + 22 * stepB, dy: -5 * stepB) { leg in
+            fill(leg, rrect(86.5, 72, 9.5, 20, 4.5), lightCoat)
+            fill(leg, ellipse(88.5, 92, 7.8, 3.6), snout)
+        }
+
+        // Upright hips & tall dancing torso leaning warmly toward partner
+        fill(placed(b, \.haunch), ellipse(86, 74, 17, 12), shadowCoat)
+        let torso = placed(b, \.torso)
+        let swayTilt = -8 + 6 * sin(t * 2.8)
+        with(torso, pivot: CGPoint(x: 82, y: 78), rotate: swayTilt) { upright in
+            let body = ellipse(82, 56, 18.5, 24.5)
+            fill(upright, body, coat)
+            drawMarkings(upright, on: body, patchShape: path {
+                $0.move(to: CGPoint(x: 88, y: 36))
+                $0.addQuadCurve(to: CGPoint(x: 101, y: 63), control: CGPoint(x: 103, y: 44))
+                $0.addQuadCurve(to: CGPoint(x: 83, y: 52), control: CGPoint(x: 94, y: 55))
+                $0.closeSubpath()
+            })
+            drawCoatHighlights(upright, on: body, highlight: ellipse(74, 50, 7.5, 16))
+            if look?.chestPatch == true {
+                fill(upright, ellipse(71, 53, 6.5, 11), Color(hex: 0xDBD0C1))
+            }
+            if let harness = look?.harness {
+                stroke(upright, path {
+                    $0.move(to: CGPoint(x: 68, y: 56))
+                    $0.addQuadCurve(to: CGPoint(x: 97, y: 55), control: CGPoint(x: 82, y: 61))
+                }, Color(hex: harness), 4)
+            }
+        }
+
+        drawNeckwear(placed(b, \.neck), left: CGPoint(x: 60, y: 39), right: CGPoint(x: 86, y: 38),
+                     tip: CGPoint(x: 72, y: 53))
+
+        // Near front arm raised & bouncing onto partner's paws
+        let nearArmLift = -6 * stepA
+        stroke(paws, path {
+            $0.move(to: CGPoint(x: 75, y: 52))
+            $0.addQuadCurve(to: CGPoint(x: 44, y: 53 + nearArmLift),
+                            control: CGPoint(x: 59, y: 55 + nearArmLift * 0.5))
+        }, lightCoat, 9.5)
+        fill(paws, ellipse(43, 53 + nearArmLift, 7.0, 5.5), snout)
+        fill(paws, ellipse(41.5, 53.5 + nearArmLift, 2.6, 2.2), blush.opacity(0.85))
+
+        // Joyful upright head bobbing with the rhythm
+        with(placed(b, \.head), pivot: CGPoint(x: 72, y: 39), rotate: movement.headAngle,
+             dy: movement.headLift) { h in
+            let headShape = ellipse(68, 24, 17, 17)
+            fill(h, headShape, coat)
+            drawCoatHighlights(h, on: headShape, highlight: ellipse(65, 11, 10, 5))
+            with(h, pivot: CGPoint(x: 60, y: 31), scaleX: muzzleScale) { jaw in
+                fill(jaw, ellipse(52, 31, 12.5, 8), snout)
+                drawNose(jaw, cx: 41, cy: 28)
+                let pant = 1 + 0.4 * wave(0.4)
+                with(jaw, pivot: CGPoint(x: 51, y: 37), scaleY: pant) { tg in
+                    fill(tg, path {
+                        $0.move(to: CGPoint(x: 47.5, y: 37))
+                        $0.addQuadCurve(to: CGPoint(x: 54.5, y: 37), control: CGPoint(x: 51, y: 45.5))
+                        $0.closeSubpath()
+                    }, tongue)
+                }
+                stroke(jaw, path { $0.move(to: CGPoint(x: 44, y: 35.5)); $0.addQuadCurve(to: CGPoint(x: 55, y: 35.5), control: CGPoint(x: 49.5, y: 38.5)) }, ink, 1.5)
+            }
+            // Happy dancing curved smile eyes + rosy blush
+            stroke(h, path { $0.move(to: CGPoint(x: 58, y: 22)); $0.addQuadCurve(to: CGPoint(x: 66.5, y: 22), control: CGPoint(x: 62.2, y: 17.2)) }, ink, 2)
+            fill(h, ellipse(63, 30, 4.8, 2.7), blush.opacity(0.8))
+
+            // Bouncing ears
+            with(h, pivot: CGPoint(x: 75, y: 10), rotate: -14 + 26 * stepA) { e in
+                if look != nil { drawEar(e, x: 74, y: 11, length: 25); return }
+                let ear = path {
+                    $0.move(to: CGPoint(x: 73, y: 9))
+                    $0.addQuadCurve(to: CGPoint(x: 87, y: 29), control: CGPoint(x: 90, y: 6))
+                    $0.addQuadCurve(to: CGPoint(x: 76, y: 24), control: CGPoint(x: 80, y: 32))
+                    $0.addQuadCurve(to: CGPoint(x: 73, y: 9), control: CGPoint(x: 71, y: 16))
+                    $0.closeSubpath()
+                }
+                fill(e, ear, ears)
+                stroke(e, ear, rimColor, 0.9)
+            }
+        }
+    }
+
+    // MARK: Zoomies (Full-Speed Gallop + Speed Lines & Dust)
+
+    func drawZoomies(_ b: GraphicsContext, movement: DogMovement) {
+        // Motion speed lines & dust clouds trailing behind the sprinting dog
+        for i in 0..<3 {
+            let p = phase(0.42, offset: Double(i) * 0.14)
+            let lineY = 48.0 + Double(i) * 11.0
+            let startX = 132.0 + p * 22.0
+            let length = 16.0 - p * 8.0
+            var lineCtx = b
+            lineCtx.opacity *= (1 - p) * 0.45
+            stroke(lineCtx, path {
+                $0.move(to: CGPoint(x: startX, y: lineY))
+                $0.addLine(to: CGPoint(x: startX + length, y: lineY))
+            }, isDarkCoat ? Color.white.opacity(0.75) : Color(hex: 0x8A7968), 1.8)
+
+            let dustX = 122.0 + p * 34.0
+            let dustY = 89.0 - p * 12.0 - Double(i % 2) * 3.0
+            let r = 3.2 + p * 5.2
+            var dustCtx = b
+            dustCtx.opacity *= (1 - p) * 0.55
+            fill(dustCtx, ellipse(dustX, dustY, r, r * 0.72), Color(hex: 0xE5DCCD))
+        }
+
+        // Fast bounding gallop legs
+        let paws = placed(b, \.paws)
+        let frontStride = wave(0.24)
+        let backStride = wave(0.24, offset: 0.12)
+        let legSpecs: [(x: Double, stride: Double, far: Bool)] = [
+            (68, wave(0.24, offset: 0.04), true),
+            (114, wave(0.24, offset: 0.16), true),
+            (74, frontStride, false),
+            (120, backStride, false)
+        ]
+        for spec in legSpecs {
+            let angle = -42 + 88 * spec.stride
+            with(paws, pivot: CGPoint(x: spec.x, y: 65), rotate: angle, dy: -6 * spec.stride) { leg in
+                fill(leg, rrect(spec.x - 4, 63, 8.5, 25, 4), spec.far ? shadowCoat : lightCoat)
+                fill(leg, ellipse(spec.x - 1, 87, 6.5, 3.3), spec.far ? shadowCoat : snout)
+            }
+        }
+
+        // Aerodynamic stretched gallop torso
+        let torso = placed(b, \.torso)
+        with(torso, pivot: CGPoint(x: 92, y: 58), rotate: -5 + 8 * frontStride, scaleX: 1.07, scaleY: 0.94) { stretched in
+            let body = ellipse(92, 58, 36, 16.5)
+            fill(stretched, body, coat)
+            drawMarkings(stretched, on: body, patchShape: ellipse(106, 51, 15, 8))
+            drawCoatHighlights(stretched, on: body, highlight: ellipse(88, 45, 26, 5))
+            if look?.chestPatch == true { fill(stretched, ellipse(66, 63, 6, 8), Color(hex: 0xDBD0C1)) }
+            if let harness = look?.harness {
+                stroke(stretched, path {
+                    $0.move(to: CGPoint(x: 65, y: 62))
+                    $0.addQuadCurve(to: CGPoint(x: 96, y: 53), control: CGPoint(x: 80, y: 67))
+                }, Color(hex: harness), 4)
+            }
+        }
+
+        drawNeckwear(placed(b, \.neck), left: CGPoint(x: 56, y: 47), right: CGPoint(x: 77, y: 49),
+                     tip: CGPoint(x: 68, y: 65), tagOffset: look == nil ? -1 : 0)
+
+        // Head stretched forward with giant zoomie grin & streaming ears!
+        with(placed(b, \.head), pivot: CGPoint(x: 53, y: 41), rotate: movement.headAngle,
+             dy: movement.headLift) { head in
+            let headShape = ellipse(53, 41, 16.5, 15.5)
+            fill(head, headShape, coat)
+            drawCoatHighlights(head, on: headShape, highlight: ellipse(50, 29, 10, 4.8))
+            with(head, pivot: CGPoint(x: 50, y: 47), scaleX: muzzleScale) { jaw in
+                fill(jaw, ellipse(40, 47, 12.5, 7.2), snout)
+                drawNose(jaw, cx: 31, cy: 44, rx: 3.7, ry: 2.8)
+                // Flying tongue streaming in the wind!
+                with(jaw, pivot: CGPoint(x: 42, y: 51), rotate: -22 + 12 * wave(0.2)) { tg in
+                    fill(tg, path {
+                        $0.move(to: CGPoint(x: 39, y: 51))
+                        $0.addQuadCurve(to: CGPoint(x: 49, y: 55), control: CGPoint(x: 47, y: 48))
+                        $0.addQuadCurve(to: CGPoint(x: 39, y: 51), control: CGPoint(x: 42, y: 59))
+                        $0.closeSubpath()
+                    }, tongue)
+                }
+                stroke(jaw, path { $0.move(to: CGPoint(x: 34, y: 50)); $0.addQuadCurve(to: CGPoint(x: 45, y: 50), control: CGPoint(x: 39.5, y: 53)) }, ink, 1.5)
+            }
+            // Wide happy zoomie eye
+            fill(head, ellipse(48, 39, 3.2, 3.2), ink)
+            fill(head, ellipse(49.2, 37.8, 1.2, 1.2), .white)
+            fill(head, ellipse(53, 46, 4, 2.3), blush)
+
+            // Ear streaming straight back in the breeze
+            with(head, pivot: CGPoint(x: 60, y: 31), rotate: -48 + 18 * wave(0.24)) { ear in
+                if look == nil {
+                    let shape = ellipse(66, 41, 7, 12)
+                    fill(ear, shape, ears)
+                    stroke(ear, shape, rimColor, 0.9)
+                } else {
+                    drawEar(ear, x: 60, y: 31, length: 21)
                 }
             }
         }

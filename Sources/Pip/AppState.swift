@@ -5,6 +5,7 @@ enum Mood: Hashable {
     case nap, sigh, fetch, bark, awake
     case stretch, excited, drowsy, happy, mopey, alert, coverEyes, walking, petting, wag
     case highFive, celebrate
+    case cuddle, playBow, dance, zoomies
 }
 
 enum NudgeAction: Equatable {
@@ -27,13 +28,17 @@ enum NudgeAction: Equatable {
     case meetingReady
     case captureFollowUp(String)
     case positiveAck
+    case openRedirect(NudgeLink, closeHost: String?)
 }
 
 struct Nudge: Equatable, Identifiable {
     let id = UUID()
     var mood: Mood
     var action: String          // stage direction, e.g. "lets out a long sigh"
+    var badge: String? = nil    // optional context pill, e.g. "5 visits · 18m wasted today"
     var text: String
+    var link: NudgeLink? = nil  // clickable hyperlink inside the speech bubble
+    var hasTail: Bool = false   // speech bubble tail anchored to the guide dog
     var primary: (label: String, action: NudgeAction)
     var secondary: (label: String, action: NudgeAction)? = nil
 
@@ -41,6 +46,8 @@ struct Nudge: Equatable, Identifiable {
         if case .reviewGoalStep(let reference) = primary.action { return reference }
         return nil
     }
+
+    var usesSpeechTail: Bool { hasTail || goalStep != nil }
 
     static func == (a: Nudge, b: Nudge) -> Bool { a.id == b.id }
 }
@@ -83,11 +90,15 @@ final class AppState: ObservableObject {
         didSet { Prefs.calendarAssistant = calendarAssistant }
     }
     @Published var overlay: Overlay = .none {
-        didSet { updateMood() }
+        didSet {
+            if overlay != .none { cancelPairPlay() }
+            updateMood()
+        }
     }
     @Published private(set) var menuDogID: UUID?
     @Published private(set) var mood: Mood = .nap
     @Published private(set) var moodChangedAt = Date()
+    @Published private(set) var pairPlay: PairPlayEvent?
     @Published private(set) var focusStreak = 0
     @Published private(set) var bestFocusStreak = Prefs.bestFocusStreak
     @Published private(set) var accessory = Prefs.accessory
@@ -104,6 +115,7 @@ final class AppState: ObservableObject {
     @Published private(set) var organizeError: String?
     @Published private(set) var showingTranscriptImport = false
     @Published private(set) var filedTranscriptID: Int64?
+    @Published var requestedTranscriptID: Int64?
 
     let tracker: ActivityTracker
     let library: LibraryStore
@@ -124,6 +136,11 @@ final class AppState: ObservableObject {
     private var bubbleTask: Task<Void, Never>?
     private var reactionTask: Task<Void, Never>?
     private var organizeTask: Task<Void, Never>?
+    private var redirectTask: Task<Void, Never>?
+    private var pairPlayTask: Task<Void, Never>?
+    private var pairPlayScheduler: Task<Void, Never>?
+    private var lastPairPlayKind: PairPlayKind?
+    private var recentRedirectKeys: [String] = []
     private var reaction: Mood?
     private var temperament = WeeklyTemperament.steady
     private var isLate = FocusCalendar.evening(for: Date()) != nil
@@ -143,12 +160,14 @@ final class AppState: ObservableObject {
         calendarEvents = CalendarEvents()
         calendarSync = CalendarSync()
         tracker.onStreak = { [weak self] event in self?.handleStreak(event) }
+        tracker.onDistractionThreshold = { [weak self] event in self?.handleDistractionThreshold(event) ?? false }
         tracker.onSample = { [weak self] sample in self?.handleActivity(sample) }
         tracker.onWalkFinished = { [weak self] in self?.walkFinished() }
         refreshFocusHistory(at: Date())
         if accessory.requiredDays > bestFocusStreak { accessory = .classic }
         updateMood()
         tracker.start()
+        scheduleNextPairPlay(initial: true)
     }
 
     private func updateMood() {
@@ -258,6 +277,25 @@ final class AppState: ObservableObject {
         case .positiveAck:
             overlay = .none
             react(.wag, for: 2.5)
+        case .openRedirect(let link, let closeHost):
+            if let host = closeHost {
+                tracker.closeDistractingTab(on: host)
+            }
+            switch link.destination {
+            case .url(let url):
+                overlay = .none
+                NSWorkspace.shared.open(url)
+                react(.celebrate, for: 3)
+            case .libraryTranscript(let id):
+                overlay = .none
+                requestedTranscriptID = id
+                openLibraryWindow?()
+                react(.celebrate, for: 3)
+            case .goalStep(let reference):
+                remindedGoalStep = reference
+                overlay = .panel(.nextStep)
+                react(.wag, for: 2.5)
+            }
         }
     }
 
@@ -280,6 +318,7 @@ final class AppState: ObservableObject {
     }
 
     func sessionBecameInactive() {
+        cancelPairPlay()
         tracker.setSessionActive(false)
         previousBundle = nil
         isDoomscrolling = false
@@ -300,6 +339,7 @@ final class AppState: ObservableObject {
     }
 
     private func react(_ mood: Mood, for seconds: Double, then next: Mood? = nil) {
+        cancelPairPlay()
         reactionTask?.cancel()
         reaction = mood
         updateMood()
@@ -501,6 +541,9 @@ final class AppState: ObservableObject {
     func startFocusWalk() {
         barkTask?.cancel()
         bubbleTask?.cancel()
+        redirectTask?.cancel()
+        redirectTask = nil
+        cancelPairPlay()
         overlay = .none
         tracker.startWalk()
         updateMood()
@@ -562,7 +605,7 @@ final class AppState: ObservableObject {
         // Don't interrupt someone mid-paste.
         if case .panel = overlay { return }
         if case .bubble(let nudge) = overlay,
-           nudge.primary.action == .highFive || nudge.goalStep != nil { return }
+           nudge.primary.action == .highFive || nudge.goalStep != nil || (nudge.link != nil && e.kind != .bark) { return }
         tracker.countNudge()
         let seconds = Double(e.minutes) * 60
         let miles = Format.miles(forSeconds: seconds)
@@ -615,6 +658,147 @@ final class AppState: ObservableObject {
         case .bark: minutes = Prefs.barkMinutes
         }
         handleStreak(StreakEvent(kind: kind, host: host, minutes: minutes))
+    }
+
+    /// Trigger a spontaneous or requested interplay animation (play, cuddle, 2-leg dance, zoomies).
+    func triggerPairPlay(_ requested: PairPlayKind? = nil, force: Bool = false) {
+        let hasPair = appearance.visibleDogs.count > 1
+        let available = PairPlayKind.allCases.filter { !$0.requiresPair || hasPair }
+        guard !available.isEmpty else { return }
+
+        let chosen: PairPlayKind
+        if let requested, available.contains(requested) {
+            chosen = requested
+        } else {
+            let pool = available.count > 1 ? available.filter { $0 != lastPairPlayKind } : available
+            chosen = pool.randomElement() ?? available[0]
+        }
+
+        if force {
+            barkTask?.cancel()
+            bubbleTask?.cancel()
+            reactionTask?.cancel()
+            reaction = nil
+            overlay = .none
+        } else {
+            guard canStartRandomPairPlay else { return }
+        }
+
+        pairPlayTask?.cancel()
+        lastPairPlayKind = chosen
+        let event = PairPlayEvent(
+            kind: chosen,
+            startedAt: Date(),
+            leaderIsLeft: Bool.random(),
+            seed: Double.random(in: 0...1)
+        )
+        pairPlay = event
+        let duration = chosen.duration
+        pairPlayTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(duration))
+            guard !Task.isCancelled, let self else { return }
+            if self.pairPlay?.id == event.id {
+                self.pairPlay = nil
+            }
+            self.pairPlayTask = nil
+        }
+    }
+
+    func cancelPairPlay() {
+        pairPlayTask?.cancel()
+        pairPlayTask = nil
+        if pairPlay != nil { pairPlay = nil }
+    }
+
+    private var canStartRandomPairPlay: Bool {
+        overlay == .none
+            && tracker.walk == nil
+            && reaction == nil
+            && pairPlay == nil
+            && !isLate
+            && !isDoomscrolling
+            && temperament != .mopey
+    }
+
+    private func scheduleNextPairPlay(initial: Bool = false) {
+        pairPlayScheduler?.cancel()
+        let delay = initial ? Double.random(in: 14...28) : Double.random(in: 38...95)
+        pairPlayScheduler = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(delay))
+            guard !Task.isCancelled, let self else { return }
+            if self.canStartRandomPairPlay {
+                self.triggerPairPlay(nil, force: false)
+            }
+            self.scheduleNextPairPlay(initial: false)
+        }
+    }
+
+    /// Preview a time-aware goal redirect speech bubble immediately.
+    func demoGoalRedirect() {
+        let visits = max(Prefs.distractionVisitInterval, tracker.today.distractingVisits(matching: Prefs.isDistracting))
+        let seconds = max(TimeInterval(Prefs.distractionMinuteInterval * 60),
+                          tracker.today.distractingSeconds(matching: Prefs.isDistracting))
+        let event = DistractionThresholdEvent(
+            trigger: .visits,
+            host: tracker.streakHost,
+            totalVisits: visits,
+            totalSeconds: seconds,
+            date: Date(),
+            isDemo: true
+        )
+        redirectTask?.cancel()
+        redirectTask = nil
+        overlay = .none
+        _ = handleDistractionThreshold(event)
+    }
+
+    @discardableResult
+    private func handleDistractionThreshold(_ event: DistractionThresholdEvent) -> Bool {
+        guard tracker.walk == nil else { return false }
+        if !event.isDemo {
+            guard overlay == .none, redirectTask == nil else { return false }
+        }
+
+        let plans = goalBook.plans
+        let pinned = goalBook.next?.reference
+        let transcripts = library.records
+        let openTodos = dailyTodos.orderedItems.filter { !$0.done }.map(\.title)
+        let recent = recentRedirectKeys
+
+        redirectTask = Task { [weak self] in
+            let suggestion = await DistractionRedirectEngine.suggest(
+                event: event,
+                plans: plans,
+                pinnedStep: pinned,
+                transcripts: transcripts,
+                openTodos: openTodos,
+                recentKeys: recent
+            )
+            guard !Task.isCancelled, let self else { return }
+            self.redirectTask = nil
+            guard self.tracker.walk == nil else { return }
+            if !event.isDemo, self.overlay != .none { return }
+
+            self.recentRedirectKeys.removeAll { $0 == suggestion.candidateKey }
+            self.recentRedirectKeys.insert(suggestion.candidateKey, at: 0)
+            if self.recentRedirectKeys.count > 8 { self.recentRedirectKeys.removeLast() }
+
+            if !event.isDemo { self.tracker.countNudge() }
+            let primaryLabel = event.host != nil ? "Close tab & go" : "Go do it"
+            let secondary: (String, NudgeAction) = event.isDemo ? ("Later", .dismiss) : ("Snooze 15m", .snooze(15))
+            self.overlay = .bubble(Nudge(
+                mood: suggestion.mood,
+                action: suggestion.stageDirection,
+                badge: event.summaryBadge,
+                text: suggestion.message,
+                link: suggestion.link,
+                hasTail: true,
+                primary: (primaryLabel, .openRedirect(suggestion.link, closeHost: event.host)),
+                secondary: secondary
+            ))
+            self.autoDismiss(after: 45)
+        }
+        return true
     }
 
     // MARK: - Archivist

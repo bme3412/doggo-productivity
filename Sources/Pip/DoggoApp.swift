@@ -279,6 +279,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             i.representedObject = kind
             demoMenu.addItem(i)
         }
+        demoMenu.addItem(.separator())
+        demoMenu.addItem(item("Goal redirect", #selector(demoGoalRedirect)))
+        demoMenu.addItem(.separator())
+        for playKind in PairPlayKind.allCases {
+            let playItem = item(playKind.title, #selector(demoPairPlay(_:)))
+            playItem.representedObject = playKind.rawValue
+            demoMenu.addItem(playItem)
+        }
         demoItem.submenu = demoMenu
         menu.addItem(demoItem)
 
@@ -337,6 +345,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func demo(_ sender: NSMenuItem) {
         if let raw = sender.representedObject as? String, let kind = NudgeKind(rawValue: raw) { state.demo(kind) }
+    }
+
+    @objc private func demoGoalRedirect() {
+        revealCompanion()
+        state.demoGoalRedirect()
+    }
+
+    @objc private func demoPairPlay(_ sender: NSMenuItem) {
+        revealCompanion()
+        let kind = (sender.representedObject as? String).flatMap(PairPlayKind.init(rawValue:))
+        state.triggerPairPlay(kind, force: true)
     }
 
     @objc private func toggleVisible() {

@@ -1,6 +1,86 @@
 import Foundation
 import Combine
 
+enum GoalTimeWindow: String, Codable, CaseIterable, Identifiable {
+    case anytime
+    case workday
+    case morning
+    case midday
+    case evening
+    case weekend
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .anytime: return "Anytime"
+        case .workday: return "Workday"
+        case .morning: return "Morning"
+        case .midday: return "Midday"
+        case .evening: return "Evening"
+        case .weekend: return "Weekend"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .anytime: return "Any time of day"
+        case .workday: return "Mon–Fri, 9am–5pm"
+        case .morning: return "6am–12pm"
+        case .midday: return "11am–2pm"
+        case .evening: return "5pm–10pm"
+        case .weekend: return "Sat–Sun"
+        }
+    }
+
+    var specificity: Int {
+        switch self {
+        case .anytime: return 0
+        case .workday, .weekend: return 2
+        case .morning, .midday, .evening: return 3
+        }
+    }
+
+    func matches(_ date: Date, calendar: Calendar = .autoupdatingCurrent) -> Bool {
+        let weekday = calendar.component(.weekday, from: date)
+        let hour = calendar.component(.hour, from: date)
+        let isWeekend = weekday == 1 || weekday == 7
+        switch self {
+        case .anytime: return true
+        case .workday: return !isWeekend && (9..<17).contains(hour)
+        case .morning: return (6..<12).contains(hour)
+        case .midday: return (11..<14).contains(hour)
+        case .evening: return (17..<22).contains(hour)
+        case .weekend: return isWeekend
+        }
+    }
+}
+
+enum GoalLink {
+    static func trimmed(_ raw: String?) -> String? {
+        guard let value = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else { return nil }
+        return value
+    }
+
+    static func normalizeURL(_ raw: String?) -> URL? {
+        guard let value = trimmed(raw) else { return nil }
+        let candidate = value.contains("://") ? value : "https://\(value)"
+        guard let url = URL(string: candidate),
+              let scheme = url.scheme?.lowercased(), (scheme == "http" || scheme == "https"),
+              let host = url.host, host.contains(".") else { return nil }
+        return url
+    }
+
+    static func displayLabel(for url: URL, customLabel: String? = nil) -> String {
+        if let custom = trimmed(customLabel) { return custom }
+        let host = (url.host ?? url.absoluteString).replacingOccurrences(of: "^www\\.", with: "", options: .regularExpression)
+        let path = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard !path.isEmpty else { return host }
+        let shortPath = path.count > 22 ? String(path.prefix(21)) + "…" : path
+        return "\(host)/\(shortPath)"
+    }
+}
+
 struct GoalStep: Codable, Equatable, Identifiable {
     enum Status: String, Codable { case pending, done, skipped }
 
@@ -8,6 +88,34 @@ struct GoalStep: Codable, Equatable, Identifiable {
     var title: String
     var status: Status = .pending
     var estimatedMinutes: Int?
+    var actionURL: String? = nil
+    var linkLabel: String? = nil
+
+    enum CodingKeys: String, CodingKey {
+        case id, title, status, estimatedMinutes, actionURL, linkLabel
+    }
+
+    init(id: UUID = UUID(), title: String, status: Status = .pending,
+         estimatedMinutes: Int? = nil, actionURL: String? = nil, linkLabel: String? = nil) {
+        self.id = id
+        self.title = title
+        self.status = status
+        self.estimatedMinutes = estimatedMinutes
+        self.actionURL = GoalLink.trimmed(actionURL)
+        self.linkLabel = GoalLink.trimmed(linkLabel)
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        title = try c.decode(String.self, forKey: .title)
+        status = try c.decodeIfPresent(Status.self, forKey: .status) ?? .pending
+        estimatedMinutes = try c.decodeIfPresent(Int.self, forKey: .estimatedMinutes)
+        actionURL = GoalLink.trimmed(try c.decodeIfPresent(String.self, forKey: .actionURL))
+        linkLabel = GoalLink.trimmed(try c.decodeIfPresent(String.self, forKey: .linkLabel))
+    }
+
+    var resolvedURL: URL? { GoalLink.normalizeURL(actionURL) }
 
     var estimateLabel: String? {
         Self.validEstimate(estimatedMinutes).map { "About \($0.formatted()) min" }
@@ -22,6 +130,35 @@ struct GoalPlan: Codable, Identifiable {
     var id = UUID()
     var title: String
     var steps: [GoalStep] = []
+    var timeWindow: GoalTimeWindow = .anytime
+    var actionURL: String? = nil
+    var linkLabel: String? = nil
+
+    enum CodingKeys: String, CodingKey {
+        case id, title, steps, timeWindow, actionURL, linkLabel
+    }
+
+    init(id: UUID = UUID(), title: String, steps: [GoalStep] = [],
+         timeWindow: GoalTimeWindow = .anytime, actionURL: String? = nil, linkLabel: String? = nil) {
+        self.id = id
+        self.title = title
+        self.steps = steps
+        self.timeWindow = timeWindow
+        self.actionURL = GoalLink.trimmed(actionURL)
+        self.linkLabel = GoalLink.trimmed(linkLabel)
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        title = try c.decode(String.self, forKey: .title)
+        steps = try c.decodeIfPresent([GoalStep].self, forKey: .steps) ?? []
+        timeWindow = try c.decodeIfPresent(GoalTimeWindow.self, forKey: .timeWindow) ?? .anytime
+        actionURL = GoalLink.trimmed(try c.decodeIfPresent(String.self, forKey: .actionURL))
+        linkLabel = GoalLink.trimmed(try c.decodeIfPresent(String.self, forKey: .linkLabel))
+    }
+
+    var resolvedURL: URL? { GoalLink.normalizeURL(actionURL) }
 }
 
 struct GoalStepReference: Codable, Equatable {
@@ -112,6 +249,24 @@ final class GoalBook: ObservableObject {
         return commit(change)
     }
 
+    @discardableResult
+    func updateGoalSchedule(_ id: UUID, timeWindow: GoalTimeWindow) -> Bool {
+        guard let index = planIndex(id) else { return false }
+        if saved.plans[index].timeWindow == timeWindow { return true }
+        var change = saved
+        change.plans[index].timeWindow = timeWindow
+        return commit(change)
+    }
+
+    @discardableResult
+    func updateGoalLink(_ id: UUID, actionURL: String?, linkLabel: String?) -> Bool {
+        guard let index = planIndex(id) else { return false }
+        var change = saved
+        change.plans[index].actionURL = GoalLink.trimmed(actionURL)
+        change.plans[index].linkLabel = GoalLink.trimmed(linkLabel)
+        return commit(change)
+    }
+
     /// Confirm a list of proposed steps or replace the original step with its breakdown.
     func addSteps(_ proposed: [GoalStep], to goalID: UUID, replacing original: GoalStep? = nil) -> Bool {
         guard let plan = planIndex(goalID) else { return false }
@@ -119,7 +274,8 @@ final class GoalBook: ObservableObject {
         let steps = proposed.compactMap { step -> GoalStep? in
             let trimmed = step.title.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty, seen.insert(trimmed.lowercased()).inserted else { return nil }
-            return GoalStep(title: trimmed, estimatedMinutes: GoalStep.validEstimate(step.estimatedMinutes))
+            return GoalStep(title: trimmed, estimatedMinutes: GoalStep.validEstimate(step.estimatedMinutes),
+                            actionURL: step.actionURL, linkLabel: step.linkLabel)
         }
         guard let first = steps.first else { return false }
 
@@ -137,12 +293,15 @@ final class GoalBook: ObservableObject {
         return commit(change)
     }
 
-    func editStep(_ reference: GoalStepReference, title: String, estimatedMinutes: Int?) -> Bool {
+    func editStep(_ reference: GoalStepReference, title: String, estimatedMinutes: Int?,
+                  actionURL: String? = nil, linkLabel: String? = nil) -> Bool {
         let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty, let (plan, index) = indices(reference) else { return false }
         var change = saved
         change.plans[plan].steps[index].title = title
         change.plans[plan].steps[index].estimatedMinutes = GoalStep.validEstimate(estimatedMinutes)
+        change.plans[plan].steps[index].actionURL = GoalLink.trimmed(actionURL)
+        change.plans[plan].steps[index].linkLabel = GoalLink.trimmed(linkLabel)
         return commit(change)
     }
 

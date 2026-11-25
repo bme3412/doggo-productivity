@@ -81,12 +81,25 @@ struct LibraryView: View {
         .padding(16)
         .background(LibraryColors.paper)
         .tint(LibraryColors.accent)
-        .onAppear { selectVisible() }
+        .onAppear {
+            if let requested = state.requestedTranscriptID {
+                openFiledTranscript(requested)
+                state.requestedTranscriptID = nil
+            } else {
+                selectVisible()
+            }
+        }
         .onChange(of: query) { _, _ in search() }
         .onChange(of: filter) { _, _ in selectVisible() }
         .onChange(of: store.records) { _, _ in search() }
         .onChange(of: state.filedTranscriptID) { _, id in
             if let id { openFiledTranscript(id) }
+        }
+        .onChange(of: state.requestedTranscriptID) { _, id in
+            if let id {
+                openFiledTranscript(id)
+                state.requestedTranscriptID = nil
+            }
         }
         .sheet(isPresented: Binding(
             get: { state.showingTranscriptImport },

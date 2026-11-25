@@ -8,6 +8,7 @@ struct GoalsView: View {
     @State private var newGoal = ""
     @State private var contexts: [UUID: String] = [:]
     @State private var edit: GoalTextEdit?
+    @State private var linkEdit: GoalLinkEdit?
     @State private var proposal: GoalProposal?
     @State private var requesting = false
     @State private var requestError: String?
@@ -44,6 +45,7 @@ struct GoalsView: View {
         .tint(LibraryColors.accent)
         .onAppear { if selection == nil { selection = book.plans.first?.id } }
         .sheet(item: $edit) { editor in GoalTextEditor(edit: editor) }
+        .sheet(item: $linkEdit) { editor in GoalLinkEditor(edit: editor) }
         .sheet(item: $proposal) { draft in
             GoalProposalEditor(proposal: draft) { steps in
                 book.addSteps(steps, to: draft.goal.id, replacing: draft.original)
@@ -66,12 +68,26 @@ struct GoalsView: View {
             .padding(.horizontal, 12)
             List(book.plans, selection: $selection) { plan in
                 Label {
-                    Text(plan.title)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(plan.title).lineLimit(2)
+                        if plan.timeWindow != .anytime || plan.resolvedURL != nil {
+                            HStack(spacing: 5) {
+                                if plan.timeWindow != .anytime {
+                                    Text(plan.timeWindow.title)
+                                }
+                                if plan.resolvedURL != nil {
+                                    Image(systemName: "link")
+                                }
+                            }
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        }
+                    }
                 } icon: {
                     Image(systemName: "flag")
                         .foregroundStyle(selection == plan.id ? Color.primary : LibraryColors.accent)
                 }
-                .lineLimit(2).tag(plan.id)
+                .tag(plan.id)
             }
             .listStyle(.inset)
             .scrollContentBackground(.hidden)
@@ -83,6 +99,7 @@ struct GoalsView: View {
     private func planDetail(_ plan: GoalPlan) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             planSummary(plan)
+            redirectSettingsCard(plan)
             planningControls(plan)
             if !plan.steps.isEmpty { stepsCard(plan) }
             if let next = book.next, next.reference.goalID == plan.id {
@@ -92,6 +109,63 @@ struct GoalsView: View {
                     .doggoWindowCard()
             }
         }
+    }
+
+    private func redirectSettingsCard(_ plan: GoalPlan) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                Text("Best time to suggest")
+                    .font(.system(size: 12, weight: .medium))
+                Spacer(minLength: 8)
+                Picker("Best time to suggest", selection: Binding(
+                    get: { plan.timeWindow },
+                    set: { book.updateGoalSchedule(plan.id, timeWindow: $0) }
+                )) {
+                    ForEach(GoalTimeWindow.allCases) { window in
+                        Text("\(window.title) (\(window.detail))").tag(window)
+                    }
+                }
+                .labelsHidden()
+                .frame(maxWidth: 240)
+            }
+            Divider()
+            HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Action link")
+                        .font(.system(size: 12, weight: .medium))
+                    if let url = plan.resolvedURL {
+                        Button {
+                            NSWorkspace.shared.open(url)
+                        } label: {
+                            Label(GoalLink.displayLabel(for: url, customLabel: plan.linkLabel),
+                                  systemImage: "arrow.up.right.square")
+                                .font(.caption)
+                                .foregroundStyle(Theme.trail)
+                                .lineLimit(1)
+                        }
+                        .buttonStyle(.plain)
+                        .help(url.absoluteString)
+                    } else {
+                        Text("Optional URL Doggo links to in distraction bubbles (e.g. jobs board, workout, AI study guide).")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Spacer(minLength: 8)
+                Button(plan.resolvedURL == nil ? "Add link" : "Edit link") {
+                    linkEdit = GoalLinkEdit(
+                        title: "Action link for \(plan.title)",
+                        url: plan.actionURL ?? "",
+                        label: plan.linkLabel ?? ""
+                    ) { url, label in
+                        book.updateGoalLink(plan.id, actionURL: url, linkLabel: label)
+                    }
+                }
+                .controlSize(.small)
+            }
+        }
+        .padding(14)
+        .doggoWindowCard()
     }
 
     private func planSummary(_ plan: GoalPlan) -> some View {
@@ -110,7 +184,7 @@ struct GoalsView: View {
                 }
                 Spacer(minLength: 8)
                 Button("Rename") {
-                    edit = GoalTextEdit(title: "Rename goal", text: plan.title) { title, _ in
+                    edit = GoalTextEdit(title: "Rename goal", text: plan.title) { title, _, _, _ in
                         book.renameGoal(plan.id, title: title)
                     }
                 }
@@ -135,8 +209,8 @@ struct GoalsView: View {
                 Button("Suggest steps") { suggest(for: plan) }
                     .buttonStyle(.borderedProminent).tint(Theme.trail).disabled(requesting)
                 Button("Add a step") {
-                    edit = GoalTextEdit(title: "Add a step", text: "", includesEstimate: true) { title, minutes in
-                        book.addSteps([GoalStep(title: title, estimatedMinutes: minutes)], to: plan.id)
+                    edit = GoalTextEdit(title: "Add a step", text: "", includesEstimate: true, includesLink: true) { title, minutes, url, label in
+                        book.addSteps([GoalStep(title: title, estimatedMinutes: minutes, actionURL: url, linkLabel: label)], to: plan.id)
                     }
                 }
                 if requesting { ProgressView().controlSize(.small).accessibilityLabel("Preparing suggestions") }
@@ -190,6 +264,19 @@ struct GoalsView: View {
                 if let estimate = step.estimateLabel {
                     Text(estimate).font(.caption).foregroundStyle(.secondary)
                 }
+                if let url = step.resolvedURL {
+                    Button {
+                        NSWorkspace.shared.open(url)
+                    } label: {
+                        Label(GoalLink.displayLabel(for: url, customLabel: step.linkLabel),
+                              systemImage: "arrow.up.right.square")
+                            .font(.caption)
+                            .foregroundStyle(Theme.trail)
+                            .lineLimit(1)
+                    }
+                    .buttonStyle(.plain)
+                    .help(url.absoluteString)
+                }
             }
             Spacer(minLength: 4)
             if step.status == .pending && !isNext {
@@ -199,8 +286,9 @@ struct GoalsView: View {
             Menu {
                 Button("Edit step") {
                     edit = GoalTextEdit(title: "Edit step", text: step.title, includesEstimate: true,
-                                        estimatedMinutes: step.estimatedMinutes) { title, minutes in
-                        book.editStep(ref, title: title, estimatedMinutes: minutes)
+                                        includesLink: true, estimatedMinutes: step.estimatedMinutes,
+                                        actionURL: step.actionURL ?? "", linkLabel: step.linkLabel ?? "") { title, minutes, url, label in
+                        book.editStep(ref, title: title, estimatedMinutes: minutes, actionURL: url, linkLabel: label)
                     }
                 }
                 Button("Move up") { book.moveStep(ref, by: -1) }.disabled(index == 0)
@@ -257,8 +345,11 @@ private struct GoalTextEdit: Identifiable {
     let title: String
     let text: String
     var includesEstimate = false
+    var includesLink = false
     var estimatedMinutes: Int?
-    let save: (String, Int?) -> Bool
+    var actionURL = ""
+    var linkLabel = ""
+    let save: (String, Int?, String?, String?) -> Bool
 }
 
 private struct GoalTextEditor: View {
@@ -266,13 +357,20 @@ private struct GoalTextEditor: View {
     let edit: GoalTextEdit
     @State private var text: String
     @State private var minutes: Int?
+    @State private var actionURL: String
+    @State private var linkLabel: String
     @State private var failed = false
 
     init(edit: GoalTextEdit) {
         self.edit = edit
         _text = State(initialValue: edit.text)
         _minutes = State(initialValue: edit.estimatedMinutes)
+        _actionURL = State(initialValue: edit.actionURL)
+        _linkLabel = State(initialValue: edit.linkLabel)
     }
+
+    private var trimmedURL: String { actionURL.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var urlInvalid: Bool { edit.includesLink && !trimmedURL.isEmpty && GoalLink.normalizeURL(trimmedURL) == nil }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -282,20 +380,95 @@ private struct GoalTextEditor: View {
             if edit.includesEstimate {
                 LabeledContent("Time estimate") { GoalEstimateField(minutes: $minutes) }
             }
+            if edit.includesLink {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Action link (optional)").font(.caption).foregroundStyle(.secondary)
+                    TextField("https://linkedin.com/jobs or study guide URL", text: $actionURL)
+                        .textFieldStyle(.roundedBorder)
+                    TextField("Button label (optional), e.g. Apply to new roles", text: $linkLabel)
+                        .textFieldStyle(.roundedBorder)
+                    if urlInvalid {
+                        Text("Enter a valid web address like linkedin.com/jobs or https://…")
+                            .font(.caption).foregroundStyle(.red)
+                    }
+                }
+            }
             if failed { Text("Doggo couldn’t save this change. Check the text and try again.").foregroundStyle(.red) }
             HStack {
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
                 Button("Save") {
-                    if edit.save(text, minutes) { dismiss() }
+                    if edit.save(text, minutes, trimmedURL.isEmpty ? nil : trimmedURL, linkLabel) { dismiss() }
                     else { failed = true }
                 }
                 .buttonStyle(.borderedProminent).tint(Theme.trail)
                 .keyboardShortcut(.defaultAction)
-                .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || urlInvalid)
             }
         }
-        .frame(width: 360).padding(20)
+        .frame(width: 380).padding(20)
+        .background(LibraryColors.paper)
+        .tint(LibraryColors.accent)
+    }
+}
+
+private struct GoalLinkEdit: Identifiable {
+    let id = UUID()
+    let title: String
+    let url: String
+    let label: String
+    let save: (String?, String?) -> Bool
+}
+
+private struct GoalLinkEditor: View {
+    @Environment(\.dismiss) private var dismiss
+    let edit: GoalLinkEdit
+    @State private var url: String
+    @State private var label: String
+    @State private var failed = false
+
+    init(edit: GoalLinkEdit) {
+        self.edit = edit
+        _url = State(initialValue: edit.url)
+        _label = State(initialValue: edit.label)
+    }
+
+    private var trimmedURL: String { url.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var urlInvalid: Bool { !trimmedURL.isEmpty && GoalLink.normalizeURL(trimmedURL) == nil }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(edit.title).font(.headline)
+            TextField("https://www.linkedin.com/jobs", text: $url)
+                .textFieldStyle(.roundedBorder)
+            TextField("Short link label (optional), e.g. Apply to new jobs", text: $label)
+                .textFieldStyle(.roundedBorder)
+            if urlInvalid {
+                Text("Enter a valid web address like linkedin.com/jobs or https://…")
+                    .font(.caption).foregroundStyle(.red)
+            }
+            if failed {
+                Text("Doggo couldn’t save this link. Try again.").foregroundStyle(.red)
+            }
+            HStack {
+                if !edit.url.isEmpty {
+                    Button("Remove link", role: .destructive) {
+                        if edit.save(nil, nil) { dismiss() }
+                        else { failed = true }
+                    }
+                }
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Save") {
+                    if edit.save(trimmedURL.isEmpty ? nil : trimmedURL, label) { dismiss() }
+                    else { failed = true }
+                }
+                .buttonStyle(.borderedProminent).tint(Theme.trail)
+                .keyboardShortcut(.defaultAction)
+                .disabled(urlInvalid)
+            }
+        }
+        .frame(width: 390).padding(20)
         .background(LibraryColors.paper)
         .tint(LibraryColors.accent)
     }
@@ -416,6 +589,20 @@ struct NextGoalStepPanel: View {
                 if let scheduled = action.checkInAt {
                     Text("Check-in \(scheduled.formatted(date: .abbreviated, time: .shortened))")
                         .font(.system(size: 12)).foregroundStyle(Theme.muted)
+                }
+                let plan = book.plans.first { $0.id == action.reference.goalID }
+                if let url = action.step.resolvedURL ?? plan?.resolvedURL {
+                    let custom = action.step.resolvedURL != nil ? action.step.linkLabel : plan?.linkLabel
+                    Button {
+                        NSWorkspace.shared.open(url)
+                    } label: {
+                        Label(GoalLink.displayLabel(for: url, customLabel: custom),
+                              systemImage: "arrow.up.right.square")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(Theme.trail)
+                    }
+                    .buttonStyle(.plain)
+                    .help(url.absoluteString)
                 }
                 HStack(spacing: 6) {
                     PillButton(title: "Goals") { state.perform(.openGoals) }

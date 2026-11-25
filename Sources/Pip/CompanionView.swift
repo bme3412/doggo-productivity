@@ -50,6 +50,7 @@ struct CompanionView: View {
     @State private var petting: DogPetting?
     @State private var pettingIndex = 0
     @State private var idleStartedAt = Date()
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     static let horizontalInset: CGFloat = 6
     static let verticalInset: CGFloat = 4
@@ -116,26 +117,52 @@ struct CompanionView: View {
 
     private var guideName: String { appearance.guide.name }
 
+    @ViewBuilder
     private var dogs: some View {
         let visible = appearance.visibleDogs
         let guide = appearance.guide.id
         let size = DogView.groupSize(count: visible.count)
         let idleSince = visible.count > 1 ? idleStartedAt : nil
-        return ZStack(alignment: .bottomLeading) {
-            ForEach(Array(visible.enumerated()), id: \.element.id) { index, dog in
-                let slot = DogView.slot(at: index, count: visible.count)
-                companion(dog, index: index, scale: slot.scale, isGuide: guide == dog.id, idleSince: idleSince)
-                    .offset(x: slot.offset.x, y: slot.offset.y)
-                    .zIndex(slot.zIndex)
+
+        if let event = state.pairPlay, !reduceMotion {
+            TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
+                let now = timeline.date
+                ZStack(alignment: .bottomLeading) {
+                    ForEach(Array(visible.enumerated()), id: \.element.id) { index, dog in
+                        let slot = DogView.slot(at: index, count: visible.count)
+                        let side: DogMotion.PairSide = visible.count > 1 ? (index == 0 ? .left : .right) : .single
+                        let playPose = PairPlayChoreography.pose(for: event, side: side, at: now, baseZIndex: slot.zIndex)
+                        companion(dog, index: index, scale: slot.scale, isGuide: guide == dog.id,
+                                  idleSince: idleSince, pairPose: playPose, syncedNow: now)
+                            .offset(x: slot.offset.x + playPose.dx, y: slot.offset.y + playPose.dy)
+                            .zIndex(playPose.zIndex)
+                    }
+                    if visible.count > 1 {
+                        PairPlayEffectsOverlay(event: event, now: now, size: size)
+                            .zIndex(5)
+                    }
+                }
+                .frame(width: size.width, height: size.height, alignment: .bottomLeading)
             }
+        } else {
+            ZStack(alignment: .bottomLeading) {
+                ForEach(Array(visible.enumerated()), id: \.element.id) { index, dog in
+                    let slot = DogView.slot(at: index, count: visible.count)
+                    companion(dog, index: index, scale: slot.scale, isGuide: guide == dog.id,
+                              idleSince: idleSince, pairPose: nil, syncedNow: nil)
+                        .offset(x: slot.offset.x, y: slot.offset.y)
+                        .zIndex(slot.zIndex)
+                }
+            }
+            .frame(width: size.width, height: size.height, alignment: .bottomLeading)
         }
-        .frame(width: size.width, height: size.height, alignment: .bottomLeading)
     }
 
-    private func companion(_ dog: DesktopDog, index: Int, scale: CGFloat, isGuide: Bool, idleSince: Date?) -> some View {
-        let interactive = pettingIndex == index ? petting : nil
+    private func companion(_ dog: DesktopDog, index: Int, scale: CGFloat, isGuide: Bool,
+                           idleSince: Date?, pairPose: PairDogPose?, syncedNow: Date?) -> some View {
+        let interactive = pairPose == nil && pettingIndex == index ? petting : nil
         let isPair = idleSince != nil
-        let buddyPettingSince = (isPair && petting != nil && pettingIndex != index) ? petting?.started : nil
+        let buddyPettingSince = (pairPose == nil && isPair && petting != nil && pettingIndex != index) ? petting?.started : nil
         let baseMood = isGuide ? state.mood : companionMood
         let baseChangedAt = isGuide ? state.moodChangedAt : (tracker.walk?.start ?? state.moodChangedAt)
         let mood = interactive != nil && baseMood != .highFive && baseMood != .celebrate ? .petting : baseMood
@@ -146,7 +173,8 @@ struct CompanionView: View {
                                buddyPettingSince: buddyPettingSince)
         return DogView(mood: mood, moodChangedAt: mood == .petting ? (interactive?.started ?? baseChangedAt) : baseChangedAt,
                        bandana: bandana, hasTag: state.accessory == .brassTag, petting: interactive,
-                       artwork: dog.artwork, scale: scale, motion: motion)
+                       artwork: dog.artwork, scale: scale, motion: motion,
+                       pairPose: pairPose, syncedNow: syncedNow)
     }
 
     private var companionMood: Mood {
@@ -201,7 +229,7 @@ struct CompanionView: View {
         case .none:
             EmptyView()
         case .bubble(let nudge):
-            if nudge.goalStep != nil {
+            if nudge.usesSpeechTail {
                 goalBubble(nudge)
             } else {
                 bubble(nudge).padding(alignEdge, 70)
@@ -340,17 +368,81 @@ struct NudgeBubble: View {
         let edge: Edge
     }
 
-    static let width: CGFloat = 280
+    static let width: CGFloat = 296
     var nudge: Nudge
     var tail: Tail?
     var perform: (NudgeAction) -> Void
+    @State private var hoveringLink = false
+
+    private func openLinkAction(_ link: NudgeLink) -> NudgeAction {
+        if case .openRedirect(_, let host) = nudge.primary.action {
+            return .openRedirect(link, closeHost: host)
+        }
+        return .openRedirect(link, closeHost: nil)
+    }
 
     var body: some View {
         let fill = tail == nil ? Color.white : Theme.paper
         VStack(alignment: .leading, spacing: 8) {
+            if let badge = nudge.badge {
+                HStack(spacing: 5) {
+                    Image(systemName: "clock.badge.exclamationmark")
+                        .font(.system(size: 10, weight: .semibold))
+                        .accessibilityHidden(true)
+                    Text(badge)
+                        .font(.system(size: 10.5, weight: .semibold))
+                        .monospacedDigit()
+                }
+                .foregroundStyle(Theme.amberText)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3.5)
+                .background(Theme.amber.opacity(0.15), in: Capsule())
+            }
             Text(nudge.action).font(.system(size: 11).italic()).foregroundStyle(Theme.muted)
             Text(nudge.text).font(.system(size: 13)).foregroundStyle(Theme.ink)
                 .fixedSize(horizontal: false, vertical: true)
+            if let link = nudge.link {
+                Button {
+                    perform(openLinkAction(link))
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: link.iconName)
+                            .font(.system(size: 11, weight: .semibold))
+                            .accessibilityHidden(true)
+                        Text(link.label)
+                            .font(.system(size: 12, weight: .semibold))
+                            .underline(hoveringLink)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.leading)
+                        Spacer(minLength: 4)
+                        Image(systemName: "arrow.up.right")
+                            .font(.system(size: 10, weight: .bold))
+                            .accessibilityHidden(true)
+                    }
+                    .foregroundStyle(Theme.trail)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 7)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        RoundedRectangle(cornerRadius: 9)
+                            .fill(Theme.trail.opacity(hoveringLink ? 0.16 : 0.10))
+                    )
+                    .contentShape(RoundedRectangle(cornerRadius: 9))
+                }
+                .buttonStyle(.plain)
+                .onHover { inside in
+                    guard inside != hoveringLink else { return }
+                    hoveringLink = inside
+                    if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+                }
+                .onDisappear {
+                    if hoveringLink {
+                        hoveringLink = false
+                        NSCursor.pop()
+                    }
+                }
+                .accessibilityLabel(link.label)
+            }
             HStack(spacing: 6) {
                 Spacer()
                 if let secondary = nudge.secondary {
@@ -429,7 +521,7 @@ struct DailyTodoDock: View {
     static let buttonHeight: CGFloat = 36
     static let buttonGap: CGFloat = 8
     static let rowHeight: CGFloat = 28
-    static let maxRows = 4
+    static let maxRows = 5
     static let shadowRoom: CGFloat = 8
     static let maxEventRows = 3
     static let eventRowHeight: CGFloat = 36
@@ -442,8 +534,9 @@ struct DailyTodoDock: View {
 
     static func cardHeight(itemCount: Int) -> CGFloat {
         let rows = min(itemCount, maxRows)
+        let header: CGFloat = rows == 0 ? 18 : 27
         let list: CGFloat = rows == 0 ? 0 : 8 + CGFloat(rows) * rowHeight
-        return 20 + 18 + list + 8 + 30
+        return 20 + header + list + 8 + 30
     }
 
     /// Month grid, then the selected day's date and its saved events.
@@ -470,7 +563,7 @@ struct DailyTodoDock: View {
     var body: some View {
         VStack(spacing: Self.buttonGap) {
             HStack(spacing: 6) {
-                toolButton("To-do", systemImage: "checklist", on: state.dock == .todos) {
+                toolButton("To-do", systemImage: "checklist", badge: todos.openCount, on: state.dock == .todos) {
                     state.toggleDock(.todos)
                 }
                 .accessibilityHint(state.dock == .todos ? "Hides today’s to-dos" : "Shows today’s to-dos")
@@ -502,13 +595,21 @@ struct DailyTodoDock: View {
         }
     }
 
-    private func toolButton(_ title: String, systemImage: String, on: Bool, action: @escaping () -> Void) -> some View {
+    private func toolButton(_ title: String, systemImage: String, badge: Int = 0, on: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 5) {
                 Image(systemName: systemImage)
                     .font(.system(size: 11, weight: .semibold))
                     .accessibilityHidden(true)
                 Text(title)
+                if badge > 0 {
+                    Text("\(badge)")
+                        .font(.system(size: 10, weight: .bold).monospacedDigit())
+                        .padding(.horizontal, 4.5)
+                        .frame(minWidth: 16, minHeight: 16, maxHeight: 16)
+                        .foregroundStyle(on ? Theme.ink : Color.white)
+                        .background(Capsule().fill(on ? Color.white : Theme.trail))
+                }
             }
             .font(.system(size: 12, weight: .medium))
             .frame(maxWidth: .infinity, minHeight: Self.buttonHeight)
@@ -517,22 +618,73 @@ struct DailyTodoDock: View {
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(title)
+        .accessibilityLabel(badge > 0 ? "\(title), \(badge) open" : title)
         .accessibilityValue(on ? "Shown" : "Hidden")
     }
 
     private var card: some View {
-        let rows = min(todos.items.count, Self.maxRows)
+        let ordered = todos.orderedItems
+        let total = ordered.count
+        let done = todos.doneCount
+        let rows = min(total, Self.maxRows)
+        let progress = total > 0 ? Double(done) / Double(total) : 0
         return VStack(alignment: .leading, spacing: 8) {
-            Text("Today")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(Theme.muted)
-                .frame(maxWidth: .infinity, minHeight: 18, alignment: .leading)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    Text("Today")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Theme.muted)
+                    if total > 0 {
+                        Text("\(done)/\(total)")
+                            .font(.system(size: 10, weight: .medium).monospacedDigit())
+                            .foregroundStyle(Theme.faint)
+                    }
+                    Spacer(minLength: 0)
+                    if done > 0 {
+                        Button("Clear done") {
+                            withAnimation(.easeInOut(duration: 0.18)) { todos.clearDone() }
+                        }
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(Theme.trail)
+                        .buttonStyle(.plain)
+                    }
+                }
+                .frame(maxWidth: .infinity, minHeight: 18, maxHeight: 18)
+                if total > 0 {
+                    GeometryReader { geo in
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(Theme.field)
+                            Capsule()
+                                .fill(done == total ? Theme.trail : Theme.sage)
+                                .frame(width: geo.size.width * progress)
+                                .animation(.easeOut(duration: 0.25), value: progress)
+                        }
+                    }
+                    .frame(height: 3)
+                    .accessibilityHidden(true)
+                }
+            }
             if rows > 0 {
                 ScrollView {
                     VStack(spacing: 0) {
-                        ForEach(todos.items) { item in
-                            todoRow(item)
+                        ForEach(ordered) { item in
+                            TodoRowView(
+                                item: item,
+                                onToggle: {
+                                    let wasDone = item.done
+                                    withAnimation(.easeInOut(duration: 0.18)) { todos.toggle(item.id) }
+                                    if !wasDone {
+                                        let allDone = !todos.items.isEmpty && todos.items.allSatisfy(\.done)
+                                        state.todoCompleted(allDone: allDone)
+                                    }
+                                },
+                                onPin: {
+                                    withAnimation(.easeInOut(duration: 0.18)) { todos.togglePin(item.id) }
+                                },
+                                onDelete: {
+                                    withAnimation(.easeInOut(duration: 0.18)) { todos.remove(item.id) }
+                                }
+                            )
                         }
                     }
                 }
@@ -546,33 +698,6 @@ struct DailyTodoDock: View {
             RoundedRectangle(cornerRadius: 14).fill(Color.white)
                 .shadow(color: .black.opacity(0.22), radius: 8, y: 4)
         }
-    }
-
-    private func todoRow(_ item: DailyTodos.Item) -> some View {
-        Button {
-            let wasDone = item.done
-            todos.toggle(item.id)
-            if !wasDone {
-                let allDone = !todos.items.isEmpty && todos.items.allSatisfy(\.done)
-                state.todoCompleted(allDone: allDone)
-            }
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: item.done ? "checkmark.circle.fill" : "circle")
-                    .foregroundStyle(item.done ? Theme.sage : Theme.faint)
-                Text(item.title)
-                    .strikethrough(item.done)
-                    .lineLimit(1)
-                    .foregroundStyle(item.done ? Theme.faint : Theme.ink)
-                Spacer(minLength: 0)
-            }
-            .font(.system(size: 12, weight: .medium))
-            .frame(height: Self.rowHeight)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(item.done ? "Done, \(item.title)" : item.title)
-        .accessibilityHint(item.done ? "Marks this to-do as not done" : "Marks this to-do done")
     }
 
     private var addField: some View {
@@ -598,6 +723,63 @@ struct DailyTodoDock: View {
         let before = todos.items.count
         todos.add(draft)
         if todos.items.count != before { draft = "" }
+    }
+}
+
+private struct TodoRowView: View {
+    let item: DailyTodos.Item
+    let onToggle: () -> Void
+    let onPin: () -> Void
+    let onDelete: () -> Void
+    @State private var hovered = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Button(action: onToggle) {
+                HStack(spacing: 7) {
+                    Image(systemName: item.done ? "checkmark.circle.fill" : "circle")
+                        .foregroundStyle(item.done ? Theme.sage : (item.pinned ? Theme.amber : Theme.faint))
+                    Text(item.title)
+                        .strikethrough(item.done)
+                        .lineLimit(1)
+                        .foregroundStyle(item.done ? Theme.faint : Theme.ink)
+                    Spacer(minLength: 0)
+                }
+                .font(.system(size: 12, weight: item.pinned && !item.done ? .semibold : .medium))
+                .frame(maxHeight: .infinity)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(item.title)
+            .accessibilityLabel(item.done ? "Done, \(item.title)" : (item.pinned ? "Priority, \(item.title)" : item.title))
+            .accessibilityHint(item.done ? "Marks this to-do as not done" : "Marks this to-do done")
+
+            if !item.done && (item.pinned || hovered) {
+                Button(action: onPin) {
+                    Image(systemName: item.pinned ? "star.fill" : "star")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(item.pinned ? Theme.amber : Theme.faint)
+                        .frame(width: 16, height: 16)
+                }
+                .buttonStyle(.plain)
+                .help(item.pinned ? "Remove priority" : "Pin as priority")
+                .accessibilityLabel(item.pinned ? "Unpin \(item.title)" : "Pin \(item.title)")
+            }
+
+            if hovered {
+                Button(action: onDelete) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(Theme.faint)
+                        .frame(width: 16, height: 16)
+                }
+                .buttonStyle(.plain)
+                .help("Delete")
+                .accessibilityLabel("Delete \(item.title)")
+            }
+        }
+        .frame(height: DailyTodoDock.rowHeight)
+        .onHover { hovered = $0 }
     }
 }
 

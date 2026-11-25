@@ -8,7 +8,8 @@ struct WardenPanel: View {
 
     var body: some View {
         let stats = tracker.today
-        let distracted = stats.focus?.distracted ?? stats.sites.filter { Prefs.isDistracting($0.key) }.values.reduce(0, +)
+        let distracted = stats.focus?.distracted ?? stats.distractingSeconds(matching: Prefs.isDistracting)
+        let distractingVisits = stats.distractingVisits(matching: Prefs.isDistracting)
 
         VStack(alignment: .leading, spacing: 10) {
             dailySummary(stats)
@@ -18,8 +19,9 @@ struct WardenPanel: View {
                 state.perform(.openWebsites)
             }
 
-            if distracted >= 60 {
-                DistractionSummary(seconds: distracted, streakHost: tracker.streakHost, streakSeconds: tracker.streakSeconds)
+            if distracted >= 60 || distractingVisits > 0 {
+                DistractionSummary(seconds: distracted, visits: distractingVisits,
+                                   streakHost: tracker.streakHost, streakSeconds: tracker.streakSeconds)
             }
             reminderControl
         }
@@ -147,8 +149,18 @@ struct FocusSummaryCard: View {
 
 struct DistractionSummary: View {
     let seconds: TimeInterval
+    var visits: Int? = nil
     var streakHost: String?
     var streakSeconds: TimeInterval = 0
+
+    private var headline: String {
+        let time = seconds >= 60 ? Format.duration(seconds) : "\(Int(seconds))s"
+        if let visits, visits > 0 {
+            let word = visits == 1 ? "visit" : "visits"
+            return "\(visits.formatted()) \(word) · \(time) on distracting sites"
+        }
+        return "\(time) on distracting sites"
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
@@ -159,10 +171,12 @@ struct DistractionSummary: View {
                     .background(Color(hex: 0xF0DDC5), in: Circle())
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("\(Format.duration(seconds)) on distracting sites")
+                    Text(headline)
                         .font(.system(size: 12, weight: .semibold))
-                    Text("About a \(Format.miles(forSeconds: seconds))-mile run")
-                        .font(.system(size: 11))
+                    if seconds >= 60 {
+                        Text("About a \(Format.miles(forSeconds: seconds))-mile run")
+                            .font(.system(size: 11))
+                    }
                 }
             }
             .foregroundStyle(Theme.amberText)
