@@ -24,5 +24,9 @@
     <true/>
     <key>NSAppleEventsUsageDescription</key>
     <string>Doggo checks the active browser tab to track screen time. He can redirect distracting tabs during focus walks or close them when you use Warden.</string>
+    <key>NSCalendarsFullAccessUsageDescription</key>
+    <string>Doggo reads and adds events to your macOS calendars (including Google and iCloud calendars) to show them in the companion calendar and give calm meeting heads-ups.</string>
+    <key>NSCalendarsUsageDescription</key>
+    <string>Doggo reads and adds events to your macOS calendars to show them in the companion calendar and give calm meeting heads-ups.</string>
 </dict>
 </plist>

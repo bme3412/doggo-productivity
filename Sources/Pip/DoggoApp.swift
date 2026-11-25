@@ -61,7 +61,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel = FloatingPanel()
         state.canShowGoalReminders = { [weak self] in self?.panel?.isVisible == true }
         companionHost = NSHostingView(rootView: CompanionView(state: state, appearance: state.appearance,
-                                                               tracker: state.tracker) { [weak self] origin in
+                                                               tracker: state.tracker, dailyTodos: state.dailyTodos,
+                                                               calendarEvents: state.calendarEvents,
+                                                               calendarSync: state.calendarSync) { [weak self] origin in
             self?.moveDog(to: origin)
         })
         companionHost.sizingOptions = []
@@ -89,6 +91,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let self else { return }
                 self.place(expanded: self.state.overlay != .none)
             }
+            .store(in: &cancellables)
+
+        state.dailyTodos.$items
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                self.place(expanded: self.state.overlay != .none)
+            }
+            .store(in: &cancellables)
+
+        state.$dock
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                self.place(expanded: self.state.overlay != .none)
+            }
+            .store(in: &cancellables)
+
+        Publishers.MergeMany(
+            state.calendarEvents.$events.map { _ in () }.eraseToAnyPublisher(),
+            state.calendarEvents.$selected.map { _ in () }.eraseToAnyPublisher(),
+            state.calendarSync.$events.map { _ in () }.eraseToAnyPublisher(),
+            state.calendarSync.$status.map { _ in () }.eraseToAnyPublisher()
+        )
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                self.place(expanded: self.state.overlay != .none)
+            }
+            .store(in: &cancellables)
+
+        state.tracker.$today
+            .map(\.date)
+            .removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.state.dailyTodos.rollIfNeeded() }
             .store(in: &cancellables)
 
         NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)
@@ -152,36 +190,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func place(expanded: Bool) {
         guard let fallbackScreen = NSScreen.main ?? NSScreen.screens.first else { return }
-        let dogSize = DogView.groupSize(count: state.appearance.visibleDogs.count)
+        let graphic = DogView.groupSize(count: state.appearance.visibleDogs.count)
+        let selectedDay = state.calendarEvents.selected
+        let eventCount = state.calendarSync.events(on: selectedDay).count + state.calendarEvents.events(on: selectedDay).count
+        let dock = CompanionView.dockBlock(dock: state.dock, itemCount: state.dailyTodos.items.count,
+                                           eventCount: eventCount, showsSyncBanner: !state.calendarSync.isAuthorized)
         let horizontalInset = CompanionView.horizontalInset
         let verticalInset = CompanionView.verticalInset
         let fallback = fallbackScreen.visibleFrame
-        let origin = dogOrigin ?? NSPoint(x: fallback.maxX - dogSize.width - horizontalInset - 8,
-                                          y: fallback.minY + verticalInset + 6)
-        let center = NSPoint(x: origin.x + dogSize.width / 2, y: origin.y + dogSize.height / 2)
+        let origin = dogOrigin ?? NSPoint(x: fallback.maxX - graphic.width - horizontalInset - 8,
+                                          y: fallback.minY + verticalInset + dock + 6)
+        let center = NSPoint(x: origin.x + graphic.width / 2, y: origin.y + graphic.height / 2)
         let visibleFrame = NSScreen.screens.first { $0.frame.contains(center) }?.visibleFrame ?? fallback
         let insetFrame = visibleFrame.insetBy(dx: horizontalInset, dy: verticalInset)
-        let dog = NSRect(x: min(max(origin.x, insetFrame.minX), insetFrame.maxX - dogSize.width),
-                         y: min(max(origin.y, insetFrame.minY), insetFrame.maxY - dogSize.height),
-                         width: dogSize.width, height: dogSize.height)
+        // Keep the switches under the dogs, above the bottom of the screen.
+        let graphicY = min(max(origin.y, insetFrame.minY + dock),
+                           max(insetFrame.maxY - graphic.height, insetFrame.minY + dock))
+        let dog = NSRect(x: min(max(origin.x, insetFrame.minX), insetFrame.maxX - graphic.width),
+                         y: graphicY,
+                         width: graphic.width, height: graphic.height)
             .insetBy(dx: -horizontalInset, dy: -verticalInset)
 
         // Grow the panel around the dog, using the other side when space runs out.
-        let compactWidth = max(compactSize.width, dogSize.width + 2 * horizontalInset)
+        let compactWidth = max(compactSize.width, graphic.width + 2 * horizontalInset)
+        let stackHeight = graphic.height + 2 * verticalInset + dock
         let size: NSSize
         if expanded && state.overlay == .menu {
-            size = NSSize(width: compactWidth, height: 252)
+            size = NSSize(width: compactWidth, height: stackHeight + 138)
+        } else if expanded {
+            size = NSSize(width: expandedSize.width, height: expandedSize.height + dock)
         } else {
-            size = expanded ? expandedSize : NSSize(width: compactWidth, height: compactSize.height)
+            size = NSSize(width: compactWidth, height: stackHeight)
         }
         let left = dog.maxX - visibleFrame.minX
         let right = visibleFrame.maxX - dog.minX
-        let above = visibleFrame.maxY - dog.minY
-        let below = dog.maxY - visibleFrame.minY
+        let upRoom = visibleFrame.maxY - (dog.minY - dock)
+        let downRoom = dog.maxY - visibleFrame.minY
         let growsLeft = left >= min(size.width, right)
-        let growsUp = above >= min(size.height, below)
+        let growsUp = upRoom >= min(size.height, downRoom)
         let width = min(size.width, growsLeft ? left : right)
-        let height = min(size.height, growsUp ? above : below)
+        let height = min(size.height, growsUp ? upRoom : downRoom)
         let alignment = Alignment(horizontal: growsLeft ? .trailing : .leading,
                                   vertical: growsUp ? .bottom : .top)
         if companionHost.rootView.alignment != alignment {
@@ -189,7 +237,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let frame = NSRect(x: growsLeft ? dog.maxX - width : dog.minX,
-                           y: growsUp ? dog.minY : dog.maxY - height,
+                           y: growsUp ? dog.minY - dock : dog.maxY - height,
                            width: width, height: height)
         if panel.frame != frame { panel.setFrame(frame, display: true) }
     }
@@ -200,9 +248,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.image = NSImage(systemSymbolName: "pawprint.fill", accessibilityDescription: "Doggo")
         rebuildMenu()
-        state.$persona.sink { [weak self] _ in
-            DispatchQueue.main.async { self?.rebuildMenu() }
-        }.store(in: &cancellables)
         state.tracker.$walk.map { $0 != nil }.removeDuplicates().dropFirst().sink { [weak self] _ in
             DispatchQueue.main.async { self?.rebuildMenu() }
         }.store(in: &cancellables)
@@ -211,7 +256,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func rebuildMenu() {
         let menu = NSMenu()
         menu.addItem(item("Goals", #selector(openGoals), key: "g"))
-        menu.addItem(item("Next step", #selector(openNextStep)))
         menu.addItem(item("Paste a transcript…", #selector(pasteTranscript), key: "v"))
         menu.addItem(item("Open library", #selector(openLibrary), key: "l"))
         menu.addItem(group("Screen Time", [
@@ -227,17 +271,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             item("Accessories", #selector(openAccessories))
         ]))
         menu.addItem(.separator())
-
-        let personaItem = NSMenuItem(title: "Persona", action: nil, keyEquivalent: "")
-        let personaMenu = NSMenu()
-        for p in Persona.allCases {
-            let i = item(p.title, #selector(setPersona(_:)))
-            i.representedObject = p.rawValue
-            i.state = state.persona == p ? .on : .off
-            personaMenu.addItem(i)
-        }
-        personaItem.submenu = personaMenu
-        menu.addItem(personaItem)
 
         let demoItem = NSMenuItem(title: "Try a mood", action: nil, keyEquivalent: "")
         let demoMenu = NSMenu()
@@ -285,10 +318,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func pasteTranscript() { state.startPaste() }
     @objc private func openLibrary() { state.perform(.openLibrary) }
     @objc private func openGoals() { state.perform(.openGoals) }
-    @objc private func openNextStep() {
-        revealCompanion()
-        state.perform(.openNextStep)
-    }
     @objc private func openMyDogs() { state.perform(.openMyDogs) }
     @objc private func openWarden() { openPanelFromPaw(.warden) }
     @objc private func openWebsites() { state.perform(.openWebsites) }
@@ -304,10 +333,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func toggleWalk() {
         if state.tracker.walk == nil { state.startFocusWalk() }
         else { state.endFocusWalk() }
-    }
-
-    @objc private func setPersona(_ sender: NSMenuItem) {
-        if let raw = sender.representedObject as? String, let p = Persona(rawValue: raw) { state.persona = p }
     }
 
     @objc private func demo(_ sender: NSMenuItem) {
@@ -397,7 +422,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             w.title = "Doggo Settings"
             applyWindowPalette(to: w)
             w.isReleasedWhenClosed = false
-            w.contentView = NSHostingView(rootView: SettingsView())
+            w.contentView = NSHostingView(rootView: SettingsView(state: state, calendarSync: state.calendarSync))
             w.center()
             settingsWindow = w
         }

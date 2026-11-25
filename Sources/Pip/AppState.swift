@@ -19,10 +19,14 @@ enum NudgeAction: Equatable {
     case openSettings
     case openGoals
     case openMyDogs
-    case openNextStep
     case reviewGoalStep(GoalStepReference)
     case postponeGoalCheckIn(GoalStepReference)
     case highFive
+    case openCalendarDock
+    case joinMeeting(URL)
+    case meetingReady
+    case captureFollowUp(String)
+    case positiveAck
 }
 
 struct Nudge: Equatable, Identifiable {
@@ -50,6 +54,12 @@ enum Overlay: Equatable {
     case panel(PanelPage)
 }
 
+/// Which companion panel, if any, is open under the dogs.
+enum CompanionDock: Equatable {
+    case todos
+    case calendar
+}
+
 /// The review form retains its draft while its closing animation runs.
 @MainActor
 final class TranscriptDraft: ObservableObject {
@@ -63,11 +73,14 @@ final class TranscriptDraft: ObservableObject {
 /// Single source of truth for the companion.
 @MainActor
 final class AppState: ObservableObject {
-    @Published var persona: Persona = Prefs.persona {
-        didSet { Prefs.persona = persona }
-    }
     @Published var level: Strictness = Prefs.level {
         didSet { Prefs.level = level }
+    }
+    @Published var coachReminders: Bool = Prefs.coachReminders {
+        didSet { Prefs.coachReminders = coachReminders }
+    }
+    @Published var calendarAssistant: Bool = Prefs.calendarAssistant {
+        didSet { Prefs.calendarAssistant = calendarAssistant }
     }
     @Published var overlay: Overlay = .none {
         didSet { updateMood() }
@@ -80,6 +93,8 @@ final class AppState: ObservableObject {
     @Published private(set) var accessory = Prefs.accessory
     @Published private(set) var report: WeeklyReport?
     @Published private(set) var remindedGoalStep: GoalStepReference?
+    @Published var dock: CompanionDock?
+    @Published var pendingTodoDraft: String?
 
     // Archivist draft
     @Published var draftText = ""
@@ -94,6 +109,9 @@ final class AppState: ObservableObject {
     let library: LibraryStore
     let goalBook: GoalBook
     let appearance: DogAppearance
+    let dailyTodos: DailyTodos
+    let calendarEvents: CalendarEvents
+    let calendarSync: CalendarSync
 
     var openLibraryWindow: (() -> Void)?
     var openSettingsWindow: (() -> Void)?
@@ -113,12 +131,17 @@ final class AppState: ObservableObject {
     private var previousBundle: String?
     private var lastCoachReminder: TimeInterval = 0
     private var streakCheck: (day: String, qualified: Bool)?
+    private var runwayNotified: Set<String> = []
+    private var wrapNotified: Set<String> = []
 
     init() {
         tracker = ActivityTracker()
         library = LibraryStore()
         goalBook = GoalBook()
         appearance = DogAppearance()
+        dailyTodos = DailyTodos()
+        calendarEvents = CalendarEvents()
+        calendarSync = CalendarSync()
         tracker.onStreak = { [weak self] event in self?.handleStreak(event) }
         tracker.onSample = { [weak self] sample in self?.handleActivity(sample) }
         tracker.onWalkFinished = { [weak self] in self?.walkFinished() }
@@ -151,6 +174,10 @@ final class AppState: ObservableObject {
     }
 
     // MARK: - Interaction
+
+    func toggleDock(_ choice: CompanionDock) {
+        dock = dock == choice ? nil : choice
+    }
 
     func dogTapped(_ dogID: UUID? = nil) {
         if mood == .highFive { perform(.highFive); return }
@@ -199,9 +226,6 @@ final class AppState: ObservableObject {
         case .openMyDogs:
             overlay = .none
             openMyDogsWindow?()
-        case .openNextStep:
-            remindedGoalStep = nil
-            overlay = .panel(.nextStep)
         case .reviewGoalStep(let reference):
             remindedGoalStep = reference
             overlay = .panel(.nextStep)
@@ -215,7 +239,30 @@ final class AppState: ObservableObject {
         case .highFive:
             overlay = .none
             react(.celebrate, for: 2.5)
+        case .openCalendarDock:
+            overlay = .none
+            dock = .calendar
+            react(.wag, for: 2.5)
+        case .joinMeeting(let url):
+            overlay = .none
+            NSWorkspace.shared.open(url)
+            react(.celebrate, for: 3)
+        case .meetingReady:
+            overlay = .none
+            react(.wag, for: 3)
+        case .captureFollowUp(let title):
+            overlay = .none
+            pendingTodoDraft = "Follow up: \(title) — "
+            dock = .todos
+            react(.wag, for: 2.5)
+        case .positiveAck:
+            overlay = .none
+            react(.wag, for: 2.5)
         }
+    }
+
+    func todoCompleted(allDone: Bool) {
+        react(allDone ? .celebrate : .wag, for: allDone ? 3 : 2.2)
     }
 
     func finishGoalStep(_ reference: GoalStepReference) {
@@ -286,6 +333,8 @@ final class AppState: ObservableObject {
         if tracker.deskSeconds < lastCoachReminder { lastCoachReminder = 0 }
         guard sample.isActive, overlay == .none, tracker.walk == nil else { return }
 
+        if calendarAssistant, checkCalendarAssistant(at: sample.date) { return }
+
         let reminders = Prefs.goalReminders
         let timeAvailable = canShowGoalReminders() && sample.bundleID != Bundle.main.bundleIdentifier
             ? reminders.timeRemaining(at: sample.date) : nil
@@ -293,7 +342,7 @@ final class AppState: ObservableObject {
             showGoalReminder(next, at: sample.date, scheduled: true)
             return
         }
-        if persona == .warden && deliverWeeklyReportIfDue(at: sample.date) { return }
+        if deliverWeeklyReportIfDue(at: sample.date) { return }
         if let evening {
             let key = ActivityTracker.dayString(evening)
             if Prefs.lastBedtimeEvening != key {
@@ -308,7 +357,69 @@ final class AppState: ObservableObject {
             showGoalReminder(next, at: sample.date, scheduled: false)
             return
         }
-        if persona == .coach { remindAtDesk() }
+        if coachReminders { remindAtDesk() }
+    }
+
+    private func checkCalendarAssistant(at date: Date) -> Bool {
+        guard calendarSync.isAuthorized else { return false }
+
+        if let upcoming = calendarSync.upcomingRunwayEvent(at: date),
+           !runwayNotified.contains(upcoming.id) {
+            runwayNotified.insert(upcoming.id)
+            let minutes = max(1, Int(ceil(upcoming.startDate.timeIntervalSince(date) / 60)))
+            let primary: (String, NudgeAction) = upcoming.meetingURL.map { ("Join meeting", .joinMeeting($0)) }
+                ?? ("I’m ready", .meetingReady)
+            overlay = .bubble(Nudge(
+                mood: .alert,
+                action: "perks up for your next event",
+                text: "“\(upcoming.title)” starts in \(minutes) min (\(upcoming.timeLabel)). Wrap your thought and join cleanly.",
+                primary: primary,
+                secondary: ("Dismiss", .dismiss)
+            ))
+            autoDismiss(after: 45)
+            return true
+        }
+
+        if let ended = calendarSync.recentlyEndedEvent(at: date),
+           !wrapNotified.contains(ended.id) {
+            wrapNotified.insert(ended.id)
+            overlay = .bubble(Nudge(
+                mood: .happy,
+                action: "checks in after your meeting",
+                text: "“\(ended.title)” just wrapped. Drop any follow-up into Today’s to-do while it’s fresh?",
+                primary: ("Add follow-up", .captureFollowUp(ended.title)),
+                secondary: ("All clear", .positiveAck)
+            ))
+            autoDismiss(after: 35)
+            return true
+        }
+
+        let hour = Calendar.current.component(.hour, from: date)
+        let todayKey = ActivityTracker.dayString(date)
+        if hour >= 6, hour < 12, Prefs.lastMorningBriefDay != todayKey,
+           let shape = calendarSync.dayShape(at: date) {
+            Prefs.lastMorningBriefDay = todayKey
+            let countLabel = shape.eventCount == 1 ? "1 event today." : "\(shape.eventCount) events today."
+            let blockText: String
+            if let start = shape.bestBlockStart, let end = shape.bestBlockEnd, shape.bestBlockMinutes >= 45 {
+                let startText = start.formatted(date: .omitted, time: .shortened)
+                let endText = end.formatted(date: .omitted, time: .shortened)
+                blockText = " Your clearest open block is \(startText) – \(endText)."
+            } else {
+                blockText = " Packed stretch ahead — take quick breathers between them."
+            }
+            overlay = .bubble(Nudge(
+                mood: .happy,
+                action: "looks over today’s calendar",
+                text: countLabel + blockText,
+                primary: ("View calendar", .openCalendarDock),
+                secondary: ("Got it", .positiveAck)
+            ))
+            autoDismiss(after: 30)
+            return true
+        }
+
+        return false
     }
 
     private func goalStepToSuggest(fitting seconds: TimeInterval) -> NextGoalStep? {
@@ -448,7 +559,6 @@ final class AppState: ObservableObject {
     // MARK: - Warden
 
     private func handleStreak(_ e: StreakEvent) {
-        guard persona == .warden else { return }
         // Don't interrupt someone mid-paste.
         if case .panel = overlay { return }
         if case .bubble(let nudge) = overlay,
@@ -504,10 +614,7 @@ final class AppState: ObservableObject {
         case .fetch: minutes = Prefs.fetchMinutes
         case .bark: minutes = Prefs.barkMinutes
         }
-        let previous = persona
-        persona = .warden
         handleStreak(StreakEvent(kind: kind, host: host, minutes: minutes))
-        if previous != .warden { persona = previous }
     }
 
     // MARK: - Archivist

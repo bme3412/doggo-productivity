@@ -132,9 +132,14 @@ struct CoachPanel: View {
         VStack(alignment: .leading, spacing: 10) {
             Text("\(Format.duration(tracker.deskSeconds)) at your Mac")
                 .font(.system(size: 20, weight: .semibold))
-            Text("Next stand break in \(Format.countdown(CoachReminder.untilNextStand(at: tracker.deskSeconds))).")
+            Text(state.coachReminders
+                 ? "Next stand break in \(Format.countdown(CoachReminder.untilNextStand(at: tracker.deskSeconds)))."
+                 : "Desk reminders are paused.")
                 .font(.system(size: 12)).foregroundStyle(Theme.muted)
                 .monospacedDigit()
+            Toggle("Posture, stretch, and water reminders", isOn: $state.coachReminders)
+                .toggleStyle(.switch)
+                .font(.system(size: 12, weight: .medium))
             Text("Doggo checks in about posture, stretching, and water. After two hours at your Mac, he’ll suggest a walk.")
                 .font(.system(size: 12)).foregroundStyle(Theme.muted)
                 .fixedSize(horizontal: false, vertical: true)

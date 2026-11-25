@@ -21,11 +21,17 @@ struct DogMotion {
         let time: TimeInterval
         let mood: Mood
         let elapsed: TimeInterval
+        var facingRight = false
     }
 
+    enum PairSide { case single, left, right }
+
     var alternatePace = false
+    var pairSide: PairSide = .single
     var idleSince: Date? = nil
     var walkDelay: TimeInterval = 0
+    var reactionDelay: TimeInterval = 0
+    var buddyPettingSince: Date? = nil
 
     func frame(for mood: Mood, changedAt: Date, now: Date, reduceMotion: Bool) -> Frame {
         if reduceMotion { return Frame(time: 1, mood: mood, elapsed: 1.2) }
@@ -33,24 +39,81 @@ struct DogMotion {
         let clock = now.timeIntervalSinceReferenceDate
         let time = alternatePace ? clock * 1.11 + 0.83 : clock
         let elapsed = max(0, now.timeIntervalSince(changedAt))
+
         if mood == .walking, elapsed < walkDelay {
             return Frame(time: time, mood: .alert, elapsed: elapsed)
         }
-        guard mood == .nap, let idleSince else {
+        if reactionDelay > 0, elapsed < reactionDelay, mood != .nap, mood != .petting {
+            return Frame(time: time, mood: .nap, elapsed: elapsed)
+        }
+
+        // Notice when the other dog is getting petted and look over with a wag.
+        if let buddySince = buddyPettingSince,
+           [.nap, .happy, .mopey, .awake].contains(mood) {
+            let watched = max(0, now.timeIntervalSince(buddySince))
+            if watched >= 1.6 {
+                return Frame(time: time, mood: .wag, elapsed: watched - 1.6, facingRight: pairSide == .left)
+            } else if watched >= 0.5 {
+                return Frame(time: time, mood: .alert, elapsed: watched - 0.5, facingRight: pairSide == .left)
+            }
+        }
+
+        guard let idleSince, pairSide != .single else {
             return Frame(time: time, mood: mood, elapsed: elapsed)
         }
 
-        let cycle = alternatePace ? 37.0 : 49.0
-        let firstWake = alternatePace ? 5.0 : 13.0
+        // Shared pair choreography so the two dogs actually play off each other.
+        let cycle = 44.0
         let idleTime = max(0, now.timeIntervalSince(idleSince))
-        let phase = (idleTime + cycle - firstWake).truncatingRemainder(dividingBy: cycle)
-        switch phase {
-        case ..<3:
-            return Frame(time: time, mood: alternatePace ? .alert : .stretch, elapsed: phase)
-        case ..<6:
-            return Frame(time: time, mood: alternatePace ? .wag : .awake, elapsed: phase - 3)
-        default:
-            return Frame(time: time, mood: .nap, elapsed: phase - 6)
+        let phase = (idleTime + cycle - 6.0).truncatingRemainder(dividingBy: cycle)
+
+        if mood == .happy {
+            if pairSide == .left, (0..<5.5).contains(phase) {
+                return Frame(time: time, mood: phase < 2.8 ? .wag : .happy, elapsed: phase, facingRight: true)
+            }
+            if pairSide == .right, (0.7..<5.9).contains(phase) {
+                return Frame(time: time, mood: phase < 3.4 ? .wag : .happy, elapsed: phase - 0.7)
+            }
+            return Frame(time: time, mood: mood, elapsed: elapsed)
+        }
+
+        guard mood == .nap else {
+            return Frame(time: time, mood: mood, elapsed: elapsed)
+        }
+
+        switch pairSide {
+        case .left:
+            switch phase {
+            case 0..<1.3:
+                return Frame(time: time, mood: .alert, elapsed: phase, facingRight: true)
+            case 1.3..<3.6:
+                return Frame(time: time, mood: .wag, elapsed: phase - 1.3, facingRight: true)
+            case 3.6..<6.2:
+                return Frame(time: time, mood: .happy, elapsed: phase - 3.6, facingRight: true)
+            case 22.0..<25.0:
+                return Frame(time: time, mood: .stretch, elapsed: phase - 22.0)
+            case 25.0..<26.8:
+                return Frame(time: time, mood: .awake, elapsed: phase - 25.0, facingRight: true)
+            default:
+                return Frame(time: time, mood: .nap, elapsed: phase)
+            }
+        case .right:
+            switch phase {
+            case 0.9..<2.1:
+                return Frame(time: time, mood: .alert, elapsed: phase - 0.9)
+            case 2.1..<4.2:
+                return Frame(time: time, mood: .wag, elapsed: phase - 2.1)
+            case 4.2..<6.6:
+                return Frame(time: time, mood: .happy, elapsed: phase - 4.2)
+            case 23.1..<26.1:
+                return Frame(time: time, mood: .stretch, elapsed: phase - 23.1)
+            case 26.1..<27.8:
+                return Frame(time: time, mood: .wag, elapsed: phase - 26.1)
+            default:
+                return Frame(time: time, mood: .nap, elapsed: phase)
+            }
+        case .single:
+            return Frame(time: time, mood: .nap, elapsed: elapsed)
         }
     }
 }
@@ -70,12 +133,42 @@ struct DogView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var moodStarts: [Mood: Date] = [:]
 
+    struct Slot {
+        let offset: CGPoint
+        let scale: CGFloat
+        let zIndex: Double
+
+        var centerX: CGFloat { offset.x + 135 * scale }
+        var visualLeft: CGFloat { offset.x + 74 * scale }
+        var visualRight: CGFloat { offset.x + 200 * scale }
+    }
+
     static let canvasSize = CGSize(width: 210, height: 110)
-    static let earArea = CGRect(x: 106, y: 19, width: 44, height: 49)
-    static let companionSpacing: CGFloat = 145
+    static let earArea = CGRect(x: 106, y: 15, width: 44, height: 49)
+
+    static func slot(at index: Int, count: Int) -> Slot {
+        if count > 1 && index > 0 {
+            return Slot(offset: CGPoint(x: 118, y: -6), scale: 0.92, zIndex: 0)
+        }
+        return Slot(offset: .zero, scale: 1, zIndex: 1)
+    }
 
     static func groupSize(count: Int) -> CGSize {
-        CGSize(width: canvasSize.width + CGFloat(max(0, count - 1)) * companionSpacing, height: canvasSize.height)
+        guard count > 1 else { return canvasSize }
+        let back = slot(at: 1, count: count)
+        return CGSize(width: ceil(back.offset.x + canvasSize.width * back.scale) + 4, height: canvasSize.height)
+    }
+
+    static func visualMidX(count: Int) -> CGFloat {
+        guard count > 1 else { return 137 }
+        let front = slot(at: 0, count: count)
+        let back = slot(at: 1, count: count)
+        return (front.visualLeft + back.visualRight) / 2
+    }
+
+    static func splitX(count: Int) -> CGFloat {
+        guard count > 1 else { return canvasSize.width }
+        return (slot(at: 0, count: count).centerX + slot(at: 1, count: count).centerX) / 2
     }
 
     var body: some View {
@@ -151,7 +244,9 @@ private struct DogCanvas: View, Animatable {
 
             let layers = moods.values.filter { $0.value > 0.001 }
             guard layers.count > 1, let first = layers.first else {
-                painter(for: layers.first?.key ?? frame.mood).paint(ctx)
+                let solo = painter(for: layers.first?.key ?? frame.mood)
+                solo.paintBody(bodyContext(ctx), movement: solo.movement)
+                solo.paintEffects(ctx)
                 return
             }
 
@@ -165,13 +260,22 @@ private struct DogCanvas: View, Animatable {
             let primary = layers.max { a, b in
                 a.value == b.value ? b.key == frame.mood : a.value < b.value
             }?.key ?? frame.mood
-            painter(for: primary, pose: shape.pose).paintBody(ctx, movement: shape.movement)
+            painter(for: primary, pose: shape.pose).paintBody(bodyContext(ctx), movement: shape.movement)
             for (mood, weight) in layers {
                 var effect = ctx
                 effect.opacity *= weight / shape.weight
                 painter(for: mood).paintEffects(effect)
             }
         }
+    }
+
+    private func bodyContext(_ ctx: GraphicsContext) -> GraphicsContext {
+        guard frame.facingRight else { return ctx }
+        var flipped = ctx
+        flipped.translateBy(x: 135, y: 0)
+        flipped.scaleBy(x: -1, y: 1)
+        flipped.translateBy(x: -135, y: 0)
+        return flipped
     }
 
     private func painter(for mood: Mood, pose: DogPose? = nil) -> DogPainter {
@@ -283,12 +387,21 @@ private struct DogPainter {
         return nil
     }
     var isBlack: Bool { artwork == .black }
+    var isDarkCoat: Bool {
+        guard let rgb = look?.coat else { return isBlack }
+        let r = Double((rgb >> 16) & 255) / 255
+        let g = Double((rgb >> 8) & 255) / 255
+        let b = Double(rgb & 255) / 255
+        return 0.213 * r + 0.715 * g + 0.072 * b < 0.36
+    }
     var coat: Color { Color(hex: look?.coat ?? (isBlack ? 0x35363E : 0xF1E4D1)) }
     var shadowCoat: Color { Color(hex: look.map { DogLook.shade($0.coat, by: -0.19) } ?? (isBlack ? 0x292B32 : 0xE8D6BD)) }
     var lightCoat: Color { Color(hex: look.map { DogLook.shade($0.coat, by: 0.13) } ?? (isBlack ? 0x50525D : 0xF4E9DA)) }
     var snout: Color { Color(hex: look?.muzzle ?? (isBlack ? 0x575963 : 0xF8F0E5)) }
     var patch: Color { Color(hex: look?.markingsColor ?? (isBlack ? 0x2F3038 : 0xC99A6E)) }
     var ears: Color { Color(hex: look?.earColor ?? (isBlack ? 0x23252C : 0xA9744A)) }
+    var rimColor: Color { isDarkCoat ? Color.white.opacity(0.16) : Color(hex: 0x3A2C21, opacity: 0.16) }
+    var coatSheen: Color { isDarkCoat ? Color.white.opacity(0.11) : Color.white.opacity(0.32) }
     var muzzleScale: Double { look?.longMuzzle == true ? 1.46 : 1 }
     var ink: Color { Color(hex: isBlack ? 0x15161C : 0x2A2420) }
     var browColor: Color { Color(hex: isBlack ? 0x757583 : 0x8A6040) }
@@ -389,25 +502,40 @@ private struct DogPainter {
     }
 
     func drawEar(_ c: GraphicsContext, x: Double, y: Double, length: Double) {
+        let shape: Path
         switch look?.ears {
         case .upright:
-            fill(c, path {
+            shape = path {
                 $0.move(to: CGPoint(x: x - 6, y: y + 8))
                 $0.addQuadCurve(to: CGPoint(x: x + 1, y: y - 9), control: CGPoint(x: x - 6, y: y - 4))
                 $0.addQuadCurve(to: CGPoint(x: x + 10, y: y + 9), control: CGPoint(x: x + 12, y: y))
                 $0.closeSubpath()
-            }, ears)
+            }
         case .short:
-            fill(c, ellipse(x + 4, y + length * 0.3, 7, length * 0.36), ears)
+            shape = ellipse(x + 4, y + length * 0.3, 7, length * 0.36)
         default:
-            fill(c, path {
+            shape = path {
                 $0.move(to: CGPoint(x: x - 3, y: y))
                 $0.addCurve(to: CGPoint(x: x + 7, y: y + length),
                             control1: CGPoint(x: x + 11, y: y - 5), control2: CGPoint(x: x + 14, y: y + length * 0.6))
                 $0.addQuadCurve(to: CGPoint(x: x - 3, y: y), control: CGPoint(x: x - 8, y: y + length * 0.95))
                 $0.closeSubpath()
-            }, ears)
+            }
         }
+        fill(c, shape, ears)
+        stroke(c, shape, rimColor, 0.9)
+    }
+
+    func drawCoatHighlights(_ c: GraphicsContext, on shape: Path, highlight: Path) {
+        var clipped = c
+        clipped.clip(to: shape)
+        fill(clipped, highlight, coatSheen)
+        stroke(c, shape, rimColor, 1.1)
+    }
+
+    func drawNose(_ c: GraphicsContext, cx: Double, cy: Double, rx: Double = 4, ry: Double = 3) {
+        fill(c, ellipse(cx, cy, rx, ry), ink)
+        fill(c, ellipse(cx - rx * 0.26, cy - ry * 0.28, rx * 0.28, ry * 0.22), Color.white.opacity(0.45))
     }
 
     func drawTail(_ c: GraphicsContext, from base: CGPoint, to tip: CGPoint, control: CGPoint) {
@@ -440,9 +568,12 @@ private struct DogPainter {
             stroke(c, path { $0.move(to: left); $0.addQuadCurve(to: right, control: center) }, Color(hex: collar), 4.5)
             stroke(c, ellipse(left.x + 4, left.y + 4, 2.5, 2.5), Color(hex: 0xCCBBA4), 1)
         } else {
-            fill(c, path {
+            let fold = path {
                 $0.move(to: left); $0.addLine(to: right); $0.addLine(to: tip); $0.closeSubpath()
-            }, bandana)
+            }
+            fill(c, fold, bandana)
+            stroke(c, path { $0.move(to: left); $0.addLine(to: right) }, Color.black.opacity(0.14), 1.6)
+            stroke(c, fold, Color.black.opacity(0.08), 0.7)
         }
         drawTag(c, x: tip.x - 1, y: tip.y + tagOffset)
     }
@@ -500,7 +631,8 @@ private struct DogPainter {
 
     func paintBody(_ ctx: GraphicsContext, movement: DogMovement) {
         var c = ctx
-        c.translateBy(x: 60, y: 14)
+        c.translateBy(x: 60, y: 10)
+        drawGroundShadow(c, movement: movement)
 
         with(c, pivot: CGPoint(x: 80, y: 96), rotate: -8 * movement.lean,
              dx: -7 * movement.lean, dy: -movement.bounce) { leaned in
@@ -518,9 +650,25 @@ private struct DogPainter {
         }
     }
 
+    func drawGroundShadow(_ c: GraphicsContext, movement: DogMovement) {
+        let currentPose = pose ?? DogPose(mood: mood)
+        let stretchOffset = mood == .stretch ? -5 * stretch : 0
+        let stretchExtra = mood == .stretch ? 7 * stretch : 0
+        let minX = min(currentPose.paws.minX, currentPose.torso.minX) + stretchOffset
+        let maxX = max(currentPose.haunch.maxX, currentPose.torso.maxX)
+        let cx = (minX + maxX) / 2 - 5 * movement.lean
+        let baseRx = (maxX - minX) / 2 + 4 + stretchExtra
+        let lift = min(1, max(0, movement.bounce / 12))
+        let scale = 1 - 0.18 * lift
+        let alpha = 1 - 0.35 * lift
+        let cy = mood == .walking ? 91.5 : 94.0
+        fill(c, ellipse(cx, cy, baseRx * scale, 5.2 * scale), Color.black.opacity(0.11 * alpha))
+        fill(c, ellipse(cx, cy - 0.5, baseRx * 0.72 * scale, 3.0 * scale), Color.black.opacity(0.16 * alpha))
+    }
+
     func paintEffects(_ ctx: GraphicsContext) {
         var c = ctx
-        c.translateBy(x: 60, y: 14)
+        c.translateBy(x: 60, y: 10)
         switch mood {
         case .nap, .drowsy: drawZs(c)
         case .sigh: drawPuffs(c)
@@ -557,6 +705,7 @@ private struct DogPainter {
                 $0.addQuadCurve(to: CGPoint(x: 60, y: 58), control: CGPoint(x: 72, y: 64))
                 $0.closeSubpath()
             })
+            drawCoatHighlights(l, on: body, highlight: ellipse(84, 58, 32, 6))
         }
 
         fill(placed(c, \.haunch), ellipse(116, 86, 16, 6.5), shadowCoat)
@@ -574,10 +723,12 @@ private struct DogPainter {
                      tip: CGPoint(x: 60, y: 76))
 
         with(placed(c, \.head), pivot: CGPoint(x: 58, y: 80), rotate: movement.headAngle, dy: movement.headLift) { h in
-            fill(h, ellipse(44, 66, 18, 18), coat)
+            let headShape = ellipse(44, 66, 18, 18)
+            fill(h, headShape, coat)
+            drawCoatHighlights(h, on: headShape, highlight: ellipse(41, 52, 11, 5.5))
             with(h, pivot: CGPoint(x: 36, y: 74), scaleX: muzzleScale) { jaw in
                 fill(jaw, ellipse(28, 74, 13, 8.5), snout)
-                fill(jaw, ellipse(17, 71, 4, 3), ink)
+                drawNose(jaw, cx: 17, cy: 71)
                 let yawn = mood == .drowsy ? max(0, (wave(6) - 0.78) * 4.5) : stretch
                 if yawn > 0.1 {
                     fill(jaw, ellipse(25, 78, 3.5 + 2 * yawn, 6 * yawn), ink)
@@ -590,13 +741,15 @@ private struct DogPainter {
             let twitch = napping ? kf(phase(4.2), [(0, 0), (0.86, 0), (0.89, -14), (0.92, 4), (0.95, -8), (1, 0)]) : 0
             with(h, pivot: CGPoint(x: 52, y: 51), rotate: twitch) { e in
                 if look != nil { drawEar(e, x: 50, y: 51, length: 28); return }
-                fill(e, path {
+                let ear = path {
                     $0.move(to: CGPoint(x: 50, y: 50))
                     $0.addQuadCurve(to: CGPoint(x: 60, y: 76), control: CGPoint(x: 64, y: 52))
                     $0.addQuadCurve(to: CGPoint(x: 48, y: 70), control: CGPoint(x: 53, y: 80))
                     $0.addQuadCurve(to: CGPoint(x: 50, y: 50), control: CGPoint(x: 45, y: 58))
                     $0.closeSubpath()
-                }, ears)
+                }
+                fill(e, ear, ears)
+                stroke(e, ear, rimColor, 0.9)
             }
 
             if napping || stretch > 0.2 {
@@ -630,6 +783,7 @@ private struct DogPainter {
             $0.addQuadCurve(to: CGPoint(x: 88, y: 55), control: CGPoint(x: 100, y: 58))
             $0.closeSubpath()
         })
+        drawCoatHighlights(torso, on: body, highlight: ellipse(76, 54, 9, 17))
         if look?.chestPatch == true {
             fill(torso, path {
                 $0.move(to: CGPoint(x: 70, y: 49))
@@ -693,10 +847,12 @@ private struct DogPainter {
         let bp = phase(0.9)
         with(placed(b, \.head), pivot: CGPoint(x: 74, y: 46), rotate: movement.headAngle,
              dy: movement.headLift) { h in
-            fill(h, ellipse(70, 30, 18, 18), coat)
+            let headShape = ellipse(70, 30, 18, 18)
+            fill(h, headShape, coat)
+            drawCoatHighlights(h, on: headShape, highlight: ellipse(67, 16, 11, 5.5))
             with(h, pivot: CGPoint(x: 62, y: 37), scaleX: muzzleScale) { jaw in
                 fill(jaw, ellipse(54, 37, 13, 8.5), snout)
-                fill(jaw, ellipse(43, 34, 4, 3), ink)
+                drawNose(jaw, cx: 43, cy: 34)
 
                 if bark {
                     let open = kf(bp, [(0, 0.3), (0.1, 1), (0.3, 0.3), (1, 0.3)])
@@ -730,13 +886,15 @@ private struct DogPainter {
             let twitch = kf(phase(4.2), [(0, 0), (0.86, 0), (0.89, -14), (0.92, 4), (0.95, -8), (1, 0)])
             with(h, pivot: CGPoint(x: 76, y: 14), rotate: twitch + (mood == .alert ? -18 : 0)) { e in
                 if look != nil { drawEar(e, x: 75, y: 15, length: 29); return }
-                fill(e, path {
+                let ear = path {
                     $0.move(to: CGPoint(x: 74, y: 13))
                     $0.addQuadCurve(to: CGPoint(x: 88, y: 34), control: CGPoint(x: 91, y: 9))
                     $0.addQuadCurve(to: CGPoint(x: 77, y: 28), control: CGPoint(x: 81, y: 36))
                     $0.addQuadCurve(to: CGPoint(x: 74, y: 13), control: CGPoint(x: 72, y: 20))
                     $0.closeSubpath()
-                }, ears)
+                }
+                fill(e, ear, ears)
+                stroke(e, ear, rimColor, 0.9)
             }
             if mood == .coverEyes {
                 stroke(h, path { $0.move(to: CGPoint(x: 78, y: 55)); $0.addQuadCurve(to: CGPoint(x: 65, y: 28), control: CGPoint(x: 70, y: 41)) }, shadowCoat, 10)
@@ -763,6 +921,7 @@ private struct DogPainter {
         let body = ellipse(93, 60, 36, 17)
         fill(torso, body, coat)
         drawMarkings(torso, on: body, patchShape: ellipse(106, 53, 15, 8))
+        drawCoatHighlights(torso, on: body, highlight: ellipse(90, 47, 25, 5.5))
         if look?.chestPatch == true { fill(torso, ellipse(67, 65, 6, 8), Color(hex: 0xDBD0C1)) }
         if let harness = look?.harness {
             stroke(torso, path {
@@ -774,15 +933,22 @@ private struct DogPainter {
                      tagOffset: look == nil ? -1 : 0)
         with(placed(b, \.head), pivot: CGPoint(x: 55, y: 43), rotate: movement.headAngle,
              dy: movement.headLift) { head in
-            fill(head, ellipse(55, 43, 16.5, 15.5), coat)
+            let headShape = ellipse(55, 43, 16.5, 15.5)
+            fill(head, headShape, coat)
+            drawCoatHighlights(head, on: headShape, highlight: ellipse(52, 31, 10, 4.8))
             with(head, pivot: CGPoint(x: 52, y: 49), scaleX: muzzleScale) { jaw in
                 fill(jaw, ellipse(42, 49, 12, 7), snout)
-                fill(jaw, ellipse(33, 46, 3.7, 2.8), ink)
+                drawNose(jaw, cx: 33, cy: 46, rx: 3.7, ry: 2.8)
             }
             fill(head, ellipse(50, 41, 2.9, 2.9), ink)
             with(head, pivot: CGPoint(x: 61, y: 32), rotate: -10 + 24 * wave(0.56)) { ear in
-                if look == nil { fill(ear, ellipse(65, 43, 7, 12), ears) }
-                else { drawEar(ear, x: 61, y: 32, length: 21) }
+                if look == nil {
+                    let shape = ellipse(65, 43, 7, 12)
+                    fill(ear, shape, ears)
+                    stroke(ear, shape, rimColor, 0.9)
+                } else {
+                    drawEar(ear, x: 61, y: 32, length: 21)
+                }
             }
         }
     }

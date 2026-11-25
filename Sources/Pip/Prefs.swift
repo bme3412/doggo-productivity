@@ -1,20 +1,6 @@
 import Foundation
 import Security
 
-enum Persona: String, CaseIterable, Identifiable {
-    case archivist, warden, coach
-    var id: String { rawValue }
-    var title: String { rawValue.capitalized }
-
-    var next: Self {
-        switch self {
-        case .archivist: return .warden
-        case .warden: return .coach
-        case .coach: return .archivist
-        }
-    }
-}
-
 /// Strictness levels for the Warden, expressed as dog behaviour.
 enum Strictness: Int, CaseIterable, Identifiable {
     case nap = 0, sigh, fetch, bark
@@ -43,8 +29,9 @@ enum Prefs {
 
     static func registerDefaults() {
         d.register(defaults: [
-            "persona": Persona.warden.rawValue,
             "level": Strictness.fetch.rawValue,
+            "coachReminders": true,
+            "calendarAssistant": true,
             "sighMinutes": 15,
             "fetchMinutes": 20,
             "barkMinutes": 30,
@@ -57,13 +44,17 @@ enum Prefs {
         ])
     }
 
-    static var persona: Persona {
-        get { Persona(rawValue: d.string(forKey: "persona") ?? "") ?? .warden }
-        set { d.set(newValue.rawValue, forKey: "persona") }
-    }
     static var level: Strictness {
         get { Strictness(rawValue: d.integer(forKey: "level")) ?? .fetch }
         set { d.set(newValue.rawValue, forKey: "level") }
+    }
+    static var coachReminders: Bool {
+        get { d.bool(forKey: "coachReminders") }
+        set { d.set(newValue, forKey: "coachReminders") }
+    }
+    static var calendarAssistant: Bool {
+        get { d.bool(forKey: "calendarAssistant") }
+        set { d.set(newValue, forKey: "calendarAssistant") }
     }
     static var sighMinutes: Int {
         get { max(1, d.integer(forKey: "sighMinutes")) }
@@ -148,6 +139,11 @@ enum Prefs {
     static var lastReportWeek: String? {
         get { d.string(forKey: "lastReportWeek") }
         set { d.set(newValue, forKey: "lastReportWeek") }
+    }
+
+    static var lastMorningBriefDay: String? {
+        get { d.string(forKey: "lastMorningBriefDay") }
+        set { d.set(newValue, forKey: "lastMorningBriefDay") }
     }
 
     /// API key: Keychain first, then the ANTHROPIC_API_KEY environment variable.

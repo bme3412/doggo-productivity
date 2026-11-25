@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct SettingsView: View {
+    @ObservedObject var state: AppState
+    @ObservedObject var calendarSync: CalendarSync
     @State private var apiKey = ""
     @State private var hasKey = Prefs.apiKey != nil
     @State private var model = Prefs.claudeModel
@@ -18,8 +20,10 @@ struct SettingsView: View {
             ScrollView {
                 VStack(spacing: 12) {
                     goalReminderSettings
+                    calendarSettings
                     claudeSettings
                     wardenSettings
+                    coachSettings
                     siteSettings
                     focusGoalSettings
                 }
@@ -78,6 +82,17 @@ struct SettingsView: View {
 
     private var wardenSettings: some View {
         card("Warden reminders") {
+            LabeledContent("Strictness") {
+                Picker("Warden reminders", selection: $state.level) {
+                    ForEach(Strictness.allCases) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(width: 225)
+            }
+            Text(state.level.explanation)
+                .font(.caption).foregroundStyle(.secondary)
+            Divider()
             reminderThreshold("Sigh after", minutes: $sigh, range: 1...120)
             reminderThreshold("Fetch after", minutes: $fetch, range: 1...180)
             reminderThreshold("Bark (closes the tab) after", minutes: $bark, range: 1...240)
@@ -86,6 +101,40 @@ struct SettingsView: View {
                     .accessibilityLabel("Running pace in minutes per mile")
             }
             Text("Times count continuous minutes on distracting sites. Leaving for less than a minute keeps the streak. Two minutes without keyboard or mouse input resets it.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private var calendarSettings: some View {
+        card("Calendar sync & assistant") {
+            LabeledContent("macOS Calendar (iCloud / Google)") {
+                if calendarSync.isAuthorized {
+                    Label("Connected", systemImage: "checkmark.circle.fill")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(Theme.trail)
+                } else if calendarSync.status == .denied {
+                    Button("Open Privacy Settings") { calendarSync.openPrivacySettings() }
+                } else {
+                    Button("Connect Calendar") { calendarSync.requestAccess() }
+                }
+            }
+            Divider()
+            LabeledContent("Meeting runway & post-meeting capture") {
+                Toggle("Meeting runway & post-meeting capture", isOn: $state.calendarAssistant)
+                    .toggleStyle(.switch).labelsHidden()
+            }
+            Text("Syncs any Google, iCloud, or Exchange calendars signed into macOS System Settings › Internet Accounts. Gives a morning schedule brief, 5-minute meeting heads-ups with join links, and quick follow-up capture after meetings.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private var coachSettings: some View {
+        card("Coach reminders") {
+            LabeledContent("Posture, stretch, and water check-ins") {
+                Toggle("Posture, stretch, and water check-ins", isOn: $state.coachReminders)
+                    .toggleStyle(.switch).labelsHidden()
+            }
+            Text("Doggo checks in while you’re at your Mac, reminds you to stand every hour, and suggests a walk after two hours.")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
