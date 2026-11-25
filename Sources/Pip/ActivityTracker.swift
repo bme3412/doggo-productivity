@@ -207,7 +207,7 @@ final class ActivityTracker: ObservableObject {
     private func resetActivity() {
         if currentKey != nil { currentKey = nil }
         previousTab = nil
-        siteSession.leave()
+        siteSession.reset()
         focusStretch = 0
         resetStreak()
         resetDeskTime()
@@ -367,9 +367,13 @@ final class ActivityTracker: ObservableObject {
         guard crossedVisits || crossedMinutes else { return }
 
         let trigger: DistractionThresholdEvent.Trigger = crossedVisits ? .visits : .minutes
+        let siteVisits = today.siteVisits?[host]?.count ?? 0
+        let siteSeconds = today.sites[host] ?? 0
         let event = DistractionThresholdEvent(
             trigger: trigger,
             host: host,
+            currentSiteVisits: siteVisits,
+            currentSiteSeconds: siteSeconds,
             totalVisits: totalVisits,
             totalSeconds: totalSeconds,
             date: now

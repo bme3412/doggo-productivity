@@ -46,21 +46,38 @@ struct SiteTime: Identifiable {
     }
 }
 
-/// One foreground stretch on the same host is a visit.
+/// One stretch on the same host is a visit. Brief detours away from a site
+/// (e.g. quick app or tab switches under `reentryWindow`) continue the same visit
+/// instead of inflating the count.
 struct SiteVisitSession {
     private var host: String?
     private var lastSeen: Date?
+    private var lastSeenByHost: [String: Date] = [:]
 
-    mutating func observe(_ site: String, at date: Date, maximumGap: TimeInterval) -> Bool {
-        let gap = lastSeen.map { date.timeIntervalSince($0) }
-        let continuing = host == site && gap.map { $0 >= 0 && $0 <= maximumGap } == true
+    mutating func observe(_ site: String, at date: Date, maximumGap: TimeInterval,
+                          reentryWindow: TimeInterval = 120) -> Bool {
+        let sameActive = host == site && lastSeen.map {
+            let gap = date.timeIntervalSince($0)
+            return gap >= 0 && gap <= maximumGap
+        } == true
+        let recentReturn = lastSeenByHost[site].map {
+            let gap = date.timeIntervalSince($0)
+            return gap >= 0 && gap <= reentryWindow
+        } == true
         host = site
         lastSeen = date
-        return !continuing
+        lastSeenByHost[site] = date
+        return !(sameActive || recentReturn)
     }
 
     mutating func leave() {
         host = nil
         lastSeen = nil
+    }
+
+    mutating func reset() {
+        host = nil
+        lastSeen = nil
+        lastSeenByHost.removeAll()
     }
 }

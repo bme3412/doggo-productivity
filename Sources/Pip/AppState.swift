@@ -735,12 +735,17 @@ final class AppState: ObservableObject {
 
     /// Preview a time-aware goal redirect speech bubble immediately.
     func demoGoalRedirect() {
+        let host = tracker.streakHost
+        let siteVisits = host.flatMap { tracker.today.siteVisits?[$0]?.count } ?? 0
+        let siteSeconds = host.flatMap { tracker.today.sites[$0] } ?? 0
         let visits = max(Prefs.distractionVisitInterval, tracker.today.distractingVisits(matching: Prefs.isDistracting))
         let seconds = max(TimeInterval(Prefs.distractionMinuteInterval * 60),
                           tracker.today.distractingSeconds(matching: Prefs.isDistracting))
         let event = DistractionThresholdEvent(
             trigger: .visits,
-            host: tracker.streakHost,
+            host: host,
+            currentSiteVisits: siteVisits,
+            currentSiteSeconds: siteSeconds,
             totalVisits: visits,
             totalSeconds: seconds,
             date: Date(),
@@ -763,6 +768,9 @@ final class AppState: ObservableObject {
         let pinned = goalBook.next?.reference
         let transcripts = library.records
         let openTodos = dailyTodos.orderedItems.filter { !$0.done }.map(\.title)
+        let syncedToday = calendarSync.events(on: event.date).map { "\($0.title) (\($0.timeLabel))" }
+        let localToday = calendarEvents.events(on: event.date).map(\.title)
+        let upcomingEvents = syncedToday + localToday
         let recent = recentRedirectKeys
 
         redirectTask = Task { [weak self] in
@@ -772,6 +780,7 @@ final class AppState: ObservableObject {
                 pinnedStep: pinned,
                 transcripts: transcripts,
                 openTodos: openTodos,
+                upcomingEvents: upcomingEvents,
                 recentKeys: recent
             )
             guard !Task.isCancelled, let self else { return }

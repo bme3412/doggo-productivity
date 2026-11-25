@@ -8,15 +8,20 @@ struct DistractionThresholdEvent {
 
     let trigger: Trigger
     let host: String?
+    let currentSiteVisits: Int
+    let currentSiteSeconds: TimeInterval
     let totalVisits: Int
     let totalSeconds: TimeInterval
     let date: Date
     let isDemo: Bool
 
-    init(trigger: Trigger, host: String?, totalVisits: Int, totalSeconds: TimeInterval,
+    init(trigger: Trigger, host: String?, currentSiteVisits: Int = 0, currentSiteSeconds: TimeInterval = 0,
+         totalVisits: Int, totalSeconds: TimeInterval,
          date: Date = Date(), isDemo: Bool = false) {
         self.trigger = trigger
         self.host = host
+        self.currentSiteVisits = currentSiteVisits
+        self.currentSiteSeconds = currentSiteSeconds
         self.totalVisits = totalVisits
         self.totalSeconds = totalSeconds
         self.date = date
@@ -24,6 +29,7 @@ struct DistractionThresholdEvent {
     }
 
     var totalMinutes: Int { Int(totalSeconds / 60) }
+    var currentSiteMinutes: Int { Int(currentSiteSeconds / 60) }
 
     var summaryBadge: String {
         let visitWord = totalVisits == 1 ? "visit" : "visits"
@@ -98,6 +104,7 @@ enum DistractionRedirectEngine {
         pinnedStep: GoalStepReference?,
         transcripts: [TranscriptRecord],
         openTodos: [String],
+        upcomingEvents: [String],
         recentKeys: [String]
     ) async -> GoalRedirectSuggestion {
         let fallback = localSuggestion(
@@ -117,6 +124,7 @@ enum DistractionRedirectEngine {
             plans: plans,
             transcripts: transcripts,
             openTodos: openTodos,
+            upcomingEvents: upcomingEvents,
             recentKeys: recentKeys,
             fallback: fallback
         ) {
@@ -254,7 +262,7 @@ enum DistractionRedirectEngine {
         // Unreachable fallback
         let url = URL(string: "https://www.linkedin.com/jobs/")!
         return GoalRedirectSuggestion(
-            mood: .fetch,
+            mood: .wag,
             stageDirection: "nudges your hand toward a better tab",
             message: "\(distractionOpener(event: event)) Spend 5 minutes applying to a new role instead.",
             link: NudgeLink(label: "Browse new jobs on LinkedIn", destination: .url(url)),
@@ -274,8 +282,8 @@ enum DistractionRedirectEngine {
         if context.isWorkday {
             if let url = URL(string: "https://www.linkedin.com/jobs/") {
                 list.append(Starter(baseScore: 68, suggestion: GoalRedirectSuggestion(
-                    mood: .fetch,
-                    stageDirection: "drops a fresh job lead at your feet",
+                    mood: .wag,
+                    stageDirection: "nudges your elbow with a job link",
                     message: "\(opener) It’s a workday — use the next 10 minutes to apply to 1 or 2 new roles.",
                     link: NudgeLink(label: "Apply to new jobs on LinkedIn", destination: .url(url)),
                     candidateKey: "builtin:workday-linkedin"
@@ -359,7 +367,7 @@ enum DistractionRedirectEngine {
             ],
             "mood": [
                 "type": "string",
-                "enum": ["fetch", "alert", "happy", "stretch"]
+                "enum": ["wag", "alert", "happy", "stretch"]
             ]
         ],
         "required": ["stage_direction", "message", "link_label", "url", "library_transcript_id", "mood"]
@@ -370,6 +378,7 @@ enum DistractionRedirectEngine {
         plans: [GoalPlan],
         transcripts: [TranscriptRecord],
         openTodos: [String],
+        upcomingEvents: [String],
         recentKeys: [String],
         fallback: GoalRedirectSuggestion
     ) async -> GoalRedirectSuggestion? {
@@ -409,13 +418,16 @@ enum DistractionRedirectEngine {
             "is_workday": context.isWorkday,
             "distraction": [
                 "current_site": event.host ?? "a distracting site",
-                "total_visits_today": event.totalVisits,
-                "total_minutes_today": event.totalMinutes,
+                "current_site_visits_today": event.currentSiteVisits,
+                "current_site_minutes_today": event.currentSiteMinutes,
+                "total_distracting_visits_today": event.totalVisits,
+                "total_distracting_minutes_today": event.totalMinutes,
                 "triggered_by": event.trigger.rawValue
             ],
             "goals": goalPayload,
             "library_study_items": libraryPayload,
             "today_open_todos": Array(openTodos.prefix(6)),
+            "today_calendar_events": Array(upcomingEvents.prefix(5)),
             "recently_suggested": Array(recentKeys.prefix(4))
         ]
 
@@ -431,8 +443,10 @@ enum DistractionRedirectEngine {
         - Strongly prefer the user's own goals whose time_window matches right now (and use their saved goal/step URL when present).
         - During a workday, career actions (like applying to new jobs), focused goal steps, or short 5-10 min desk/exercise resets fit best.
         - Outside core work hours (or when goals don't cover right now), exercise/movement, AI articles, or reviewing a saved item from library_study_items fit great.
+        - Focus on ONE action only. Keep the message crisp and short (1 to 2 sentences, max 130 characters), friendly, and never preachy.
+        - The bubble already shows the visit/minute count badge at the top, so you don't need to repeat raw numbers; if you do mention them, NEVER attribute total_distracting_visits_today solely to current_site.
+        - Only mention an item from today_calendar_events or today_open_todos if it directly affects how much time they have right now, and NEVER reinterpret or rename its words (e.g. "Train to NYC" is a train ride, not "training").
         - Never invent broken or fake deep links; use either the user's saved URL, an exact library_transcript_id from library_study_items, or a clean top-level/search URL on a major site.
-        - Keep the message under 190 characters, friendly, direct, and never preachy.
         """
 
         // Race Claude against an 8-second timeout so the bubble stays responsive.
@@ -465,7 +479,7 @@ enum DistractionRedirectEngine {
         case "alert": mood = .alert
         case "happy": mood = .happy
         case "stretch": mood = .stretch
-        default: mood = .fetch
+        default: mood = .wag
         }
 
         let transcriptID = (reply["library_transcript_id"] as? Int64)
@@ -532,7 +546,7 @@ enum DistractionRedirectEngine {
             return .stretch
         }
         if isStudyTopic(lower) { return .alert }
-        return .fetch
+        return .wag
     }
 
     private static func isStudyTopic(_ text: String) -> Bool {

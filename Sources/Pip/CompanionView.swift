@@ -68,13 +68,20 @@ struct CompanionView: View {
                               eventCount: eventCount, showsSyncBanner: !calendarSync.isAuthorized)
     }
 
+    private var overlayPadding: CGFloat {
+        if case .bubble = state.overlay, overlayEdge == .bottom {
+            return max(0, DogView.canvasSize.height + dockBlock - 14)
+        }
+        return DogView.canvasSize.height + dockBlock + 6
+    }
+
     var body: some View {
         ZStack(alignment: alignment) {
             ZStack {
                 overlayContent
                     .transition(.opacity.combined(with: .move(edge: overlayEdge)))
             }
-            .padding(Edge.Set(overlayEdge), DogView.canvasSize.height + dockBlock + 6)
+            .padding(Edge.Set(overlayEdge), overlayPadding)
             .animation(.easeOut(duration: 0.2), value: state.overlay)
             dogStack
         }
@@ -383,7 +390,14 @@ struct NudgeBubble: View {
 
     var body: some View {
         let fill = tail == nil ? Color.white : Theme.paper
-        VStack(alignment: .leading, spacing: 8) {
+        let bottomTrailingRadius: CGFloat = tail == nil ? 4 : 16
+        let shape = UnevenRoundedRectangle(
+            topLeadingRadius: 16,
+            bottomLeadingRadius: 16,
+            bottomTrailingRadius: bottomTrailingRadius,
+            topTrailingRadius: 16
+        )
+        VStack(alignment: .leading, spacing: 7) {
             if let badge = nudge.badge {
                 HStack(spacing: 5) {
                     Image(systemName: "clock.badge.exclamationmark")
@@ -395,7 +409,7 @@ struct NudgeBubble: View {
                 }
                 .foregroundStyle(Theme.amberText)
                 .padding(.horizontal, 8)
-                .padding(.vertical, 3.5)
+                .padding(.vertical, 3)
                 .background(Theme.amber.opacity(0.15), in: Capsule())
             }
             Text(nudge.action).font(.system(size: 11).italic()).foregroundStyle(Theme.muted)
@@ -421,7 +435,7 @@ struct NudgeBubble: View {
                     }
                     .foregroundStyle(Theme.trail)
                     .padding(.horizontal, 10)
-                    .padding(.vertical, 7)
+                    .padding(.vertical, 6.5)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(
                         RoundedRectangle(cornerRadius: 9)
@@ -451,29 +465,44 @@ struct NudgeBubble: View {
                 PillButton(title: nudge.primary.label, primary: true) { perform(nudge.primary.action) }
             }
         }
-        .padding(14)
+        .padding(.horizontal, 13)
+        .padding(.vertical, 12)
         .frame(width: Self.width, alignment: .leading)
         .background(
-            UnevenRoundedRectangle(topLeadingRadius: 16, bottomLeadingRadius: 16,
-                                   bottomTrailingRadius: 4, topTrailingRadius: 16)
+            shape
                 .fill(fill)
-                .shadow(color: .black.opacity(0.25), radius: 14, y: 6)
+                .shadow(color: .black.opacity(0.22), radius: 12, y: 5)
+        )
+        .overlay(
+            shape.strokeBorder(Theme.line.opacity(0.95), lineWidth: 1)
+                .allowsHitTesting(false)
         )
         .overlay(alignment: tail?.edge == .top ? .topLeading : .bottomLeading) {
             if let tail {
-                Path { path in
-                    path.move(to: .zero)
-                    path.addLine(to: CGPoint(x: 16, y: 0))
-                    path.addLine(to: CGPoint(x: 8, y: 8))
-                    path.closeSubpath()
+                let tailX = min(max(24, tail.x), Self.width - 24)
+                ZStack {
+                    Path { path in
+                        path.move(to: .zero)
+                        path.addLine(to: CGPoint(x: 16, y: 0))
+                        path.addLine(to: CGPoint(x: 8, y: 8))
+                        path.closeSubpath()
+                    }
+                    .fill(fill)
+                    Path { path in
+                        path.move(to: CGPoint(x: 0.5, y: 0.5))
+                        path.addLine(to: CGPoint(x: 8, y: 8))
+                        path.addLine(to: CGPoint(x: 15.5, y: 0.5))
+                    }
+                    .stroke(Theme.line.opacity(0.95), style: StrokeStyle(lineWidth: 1, lineJoin: .round))
                 }
-                .fill(fill)
                 .frame(width: 16, height: 8)
                 .rotationEffect(.degrees(tail.edge == .top ? 180 : 0))
-                .offset(x: tail.x - 8, y: tail.edge == .top ? -7 : 7)
+                .offset(x: tailX - 8, y: tail.edge == .top ? -7.5 : 7.5)
                 .allowsHitTesting(false)
             }
         }
+        .padding(.bottom, tail?.edge == .bottom ? 9 : 0)
+        .padding(.top, tail?.edge == .top ? 9 : 0)
     }
 }
 
